@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# REVISION 2: listener independiente de paquetes virtuales
 # INSTALADOR GOLDEN SYSTEM PRO
 # Compatible con Ubuntu/Debian basados en APT, desde versiones antiguas con
 # systemd hasta versiones modernas. Usa los archivos locales si están junto al
@@ -267,7 +268,7 @@ install_packages() {
     )
     local -a optional=(
         zip xz-utils nano less net-tools gnupg gpgv jq socat python3 cron
-        iptables netcat-traditional netcat-openbsd sudo locales lsb-release
+        iptables sudo locales lsb-release
         apt-transport-https software-properties-common
     )
     local -a install_list=()
@@ -596,3 +597,4 @@ main() {
 }
 
 main "$@"
+
