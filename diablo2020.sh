@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GOLDEN ADM PRO - bootstrap REV23 UNIVERSAL APT
+# GOLDEN ADM PRO - bootstrap REV24 UNIVERSAL APT
 # Ubuntu/Debian antiguos y modernos con APT. Núcleo ligero + progreso real.
 
 set -u
@@ -229,6 +229,54 @@ install_group() {
     run_activity "$label" apt_run install -y --no-install-recommends "${todo[@]}"
 }
 
+# Instala paquetes que traen servicios sin permitir que el postinst intente
+# arrancarlos en mitad de APT. En algunas imágenes VPS (especialmente Debian)
+# ese arranque puede quedar esperando varios minutos. El servicio se inicia
+# explícitamente después, cuando Golden ya terminó de configurarlo.
+apt_install_no_autostart() {
+    local created_policy=0 backup=""
+    if [[ -e /usr/sbin/policy-rc.d ]]; then
+        backup=$(mktemp /tmp/golden-policy-rc.d.XXXXXX)
+        cp -a /usr/sbin/policy-rc.d "$backup" 2>/dev/null || backup=""
+    else
+        cat >/usr/sbin/policy-rc.d <<'EOF_POLICY'
+#!/bin/sh
+exit 101
+EOF_POLICY
+        chmod 0755 /usr/sbin/policy-rc.d
+        created_policy=1
+    fi
+
+    local rc=0
+    apt_run install -y --no-install-recommends "$@" || rc=$?
+
+    if (( created_policy == 1 )); then
+        rm -f /usr/sbin/policy-rc.d
+    elif [[ -n "$backup" && -e "$backup" ]]; then
+        cp -a "$backup" /usr/sbin/policy-rc.d 2>/dev/null || true
+        rm -f "$backup"
+    fi
+    return "$rc"
+}
+
+install_group_no_autostart() {
+    local label="$1" required="$2"; shift 2
+    local -a todo=(); local p
+    for p in "$@"; do
+        pkg_installed "$p" && continue
+        if pkg_available "$p"; then
+            todo+=("$p")
+        elif [[ "$required" == 1 ]]; then
+            msg err "Paquete requerido no disponible: $p"
+            return 1
+        else
+            msg warn "Paquete opcional omitido: $p"
+        fi
+    done
+    ((${#todo[@]})) || { msg ok "$label: ya estaba listo"; return 0; }
+    run_activity "$label" apt_install_no_autostart "${todo[@]}"
+}
+
 safe_wget() {
     local url="${1:-}" dest="${2:-}" tmp
     [[ -n "$url" && -n "$dest" ]] || return 2
@@ -244,7 +292,7 @@ safe_wget() {
 
 clear 2>/dev/null || true
 echo "======================================================================"
-echo "        GOLDEN ADM PRO - INSTALADOR REV23 UNIVERSAL"
+echo "        GOLDEN ADM PRO - INSTALADOR REV24 UNIVERSAL"
 echo "======================================================================"
 echo "Sistema : ${PRETTY_NAME:-$OS_ID $OS_VERSION}"
 echo "Fase    : Preparando instalación"
@@ -270,6 +318,9 @@ fi
 install_group "Red y certificados" 1 ca-certificates wget curl || exit 1
 install_group "Núcleo de ejecución" 1 python3 bc unzip zip lsof procps psmisc gawk || exit 1
 install_group "Utilidades Golden" 0 nano screen jq net-tools nload || true
+# Apache es parte del núcleo Golden, pero se instala SIN arrancarlo durante APT.
+# Esto evita bloqueos de postinst/service-start en Debian/Ubuntu VPS.
+install_group_no_autostart "Servidor web Apache" 1 apache2 || exit 1
 
 # Compatibilidad opcional. No aborta releases donde el paquete todavía no existe.
 if pkg_available python-is-python3 && ! pkg_installed python-is-python3; then
