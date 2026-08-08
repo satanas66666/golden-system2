@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GOLDEN ADM PRO - bootstrap REV8
+# GOLDEN ADM PRO - bootstrap REV9
 # Ubuntu/Debian con APT. Progreso visible, espera segura de locks y timeouts.
 
 set -u
@@ -13,7 +13,7 @@ C_YELLOW='\033[1;33m'
 C_CYAN='\033[1;36m'
 NET_TIMEOUT="${GOLDEN_NET_TIMEOUT:-12}"
 NET_TRIES="${GOLDEN_NET_TRIES:-3}"
-SECOND_STAGE_URL="${GOLDEN_INSTALLER_URL:-https://raw.githubusercontent.com/satanas66666/golden-system2/main/LuciferMX2019.sh}"
+SECOND_STAGE_URL="${GOLDEN_INSTALLER_URL:-https://raw.githubusercontent.com/satanas66666/golden-system/main/LuciferMX2019.sh}"
 
 if [[ $(id -u) -ne 0 ]]; then
     echo -e "${C_RED}Debes ser usuario root para ejecutar el instalador.${C_RESET}" >&2
@@ -124,7 +124,11 @@ apt_run() {
 }
 
 safe_wget() {
-    local url="$1" dest="$2" tmp="${dest}.part.$$"
+    local url dest tmp
+    url="${1:-}"
+    dest="${2:-}"
+    [[ -n "$url" && -n "$dest" ]] || return 2
+    tmp="${dest}.part.$$"
     rm -f -- "$tmp"
     if command -v wget >/dev/null 2>&1; then
         wget -q -T "$NET_TIMEOUT" -t "$NET_TRIES" -O "$tmp" "$url" || { rm -f -- "$tmp"; return 1; }
