@@ -13,7 +13,7 @@ C_YELLOW='\033[1;33m'
 C_CYAN='\033[1;36m'
 NET_TIMEOUT="${GOLDEN_NET_TIMEOUT:-12}"
 NET_TRIES="${GOLDEN_NET_TRIES:-3}"
-SECOND_STAGE_URL="${GOLDEN_INSTALLER_URL:-https://raw.githubusercontent.com/satanas66666/golden-system/main/LuciferMX2019.sh}"
+SECOND_STAGE_URL="${GOLDEN_INSTALLER_URL:-https://raw.githubusercontent.com/satanas66666/golden-system2/main/LuciferMX2019.sh}"
 
 if [[ $(id -u) -ne 0 ]]; then
     echo -e "${C_RED}Debes ser usuario root para ejecutar el instalador.${C_RESET}" >&2
