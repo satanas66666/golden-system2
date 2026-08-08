@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Golden System PRO - servidor HTTP de llaves (REV6 self-healing + legacy + descarga directa)
+# Golden System PRO - servidor HTTP de llaves (REV7 estable + self-healing + legacy + descarga directa)
 # Compatible con Ubuntu/Debian antiguos y modernos que dispongan de Bash 4+.
 #
 # Modos:
@@ -147,21 +147,28 @@ stage_payload() {
     local key="$1"
     local list_file="$2"
     local key_dir="${ROOT_DIR}/${key}"
-    local stage="${WEB_ROOT}/${key}"
-    local alt_stage="${ALT_WEB_ROOT}/${key}"
-    local file name token token_file
-    local -a names=()
+    local file name token token_file root stage
+    local -a names=() roots=()
 
-    mkdir -p "$WEB_ROOT" "$ALT_WEB_ROOT" 2>/dev/null || return 1
-    rm -rf -- "$stage" 2>/dev/null || true
-    [[ "$alt_stage" == "$stage" ]] || rm -rf -- "$alt_stage" 2>/dev/null || true
-    mkdir -p "$stage" || return 1
-    [[ "$alt_stage" == "$stage" ]] || mkdir -p "$alt_stage" || return 1
-    chmod 0755 "$stage" 2>/dev/null || true
-    [[ "$alt_stage" == "$stage" ]] || chmod 0755 "$alt_stage" 2>/dev/null || true
+    # REV7: publica temporalmente en todas las raíces históricas conocidas.
+    # Así el fallback por Apache/81 sigue funcionando aunque el generador haya
+    # sido instalado con una revisión anterior que usaba otro DocumentRoot.
+    for root in "$WEB_ROOT" "$ALT_WEB_ROOT" /var/www/golden /var/www/html /var/www; do
+        [[ -n "$root" ]] || continue
+        local seen=0 r
+        for r in "${roots[@]}"; do [[ "$r" == "$root" ]] && seen=1 && break; done
+        (( seen == 0 )) && roots+=("$root")
+    done
+
+    for root in "${roots[@]}"; do
+        mkdir -p "$root" 2>/dev/null || continue
+        stage="${root}/${key}"
+        rm -rf -- "$stage" 2>/dev/null || true
+        mkdir -p "$stage" 2>/dev/null || continue
+        chmod 0755 "$stage" 2>/dev/null || true
+    done
 
     while IFS= read -r file || [[ -n "$file" ]]; do
-        # Acepta listas antiguas separadas por espacios sin permitir expansión de glob.
         IFS=$' \t' read -r -a names <<<"$file"
         for name in "${names[@]}"; do
             safe_component "$name" || {
@@ -172,24 +179,25 @@ stage_payload() {
                 log_msg WARN "archivo ausente key=$key nombre=$name"
                 continue
             }
-            cp -f -- "${key_dir}/${name}" "${stage}/${name}" || continue
-            if [[ "$alt_stage" != "$stage" ]]; then
-                cp -f -- "${key_dir}/${name}" "${alt_stage}/${name}" 2>/dev/null || true
-            fi
-            chmod 0644 "${stage}/${name}" 2>/dev/null || true
-            [[ "$alt_stage" == "$stage" ]] || chmod 0644 "${alt_stage}/${name}" 2>/dev/null || true
+            for root in "${roots[@]}"; do
+                stage="${root}/${key}"
+                [[ -d "$stage" ]] || continue
+                cp -f -- "${key_dir}/${name}" "${stage}/${name}" 2>/dev/null || continue
+                chmod 0644 "${stage}/${name}" 2>/dev/null || true
+            done
         done
     done <"$list_file"
 
-    # Un token evita que una limpieza antigua borre una entrega renovada.
     token="$(date +%s 2>/dev/null).$$.$RANDOM"
     token_file="/tmp/golden-stage-${key}.token"
     printf '%s\n' "$token" >"$token_file"
     (
         sleep "$STAGE_TTL"
         if [[ "$(cat "$token_file" 2>/dev/null)" == "$token" ]]; then
-            rm -rf -- "$stage" "$token_file"
-            [[ "$alt_stage" == "$stage" ]] || rm -rf -- "$alt_stage"
+            for root in "${roots[@]}"; do
+                rm -rf -- "${root}/${key}" 2>/dev/null || true
+            done
+            rm -f -- "$token_file"
         fi
     ) >/dev/null 2>&1 &
 
@@ -223,9 +231,13 @@ handle_request() {
     path="${target%%\?*}"
     path="${path#/}"
 
-    # Endpoint de salud para watchdog.
+    # Endpoints internos de salud/versión para watchdog y diagnóstico.
     if [[ "$path" == "__golden_health" ]]; then
         http_reply 200 "OK" "OK" "$method"
+        return 0
+    fi
+    if [[ "$path" == "__golden_version" ]]; then
+        http_reply 200 "OK" "REV7" "$method"
         return 0
     fi
 

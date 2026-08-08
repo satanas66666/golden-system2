@@ -1,4 +1,5 @@
-# GOLDEN ADM PRO - LuciferMX2019 REV6 compatible / anti-bloqueo
+#!/usr/bin/env bash
+# GOLDEN ADM PRO - LuciferMX2019 REV7 compatible / progreso visible / anti-bloqueo
 cd $HOME
 
 SCPdir="/etc/newadm"
@@ -12,7 +13,7 @@ SCPinst="/etc/ger-inst"
 
 
 # Red robusta: ninguna descarga externa puede dejar el instalador congelado.
-NET_TIMEOUT="${GOLDEN_NET_TIMEOUT:-12}"
+NET_TIMEOUT="${GOLDEN_NET_TIMEOUT:-8}"
 NET_TRIES="${GOLDEN_NET_TRIES:-2}"
 
 safe_wget() {
@@ -31,6 +32,116 @@ safe_wget() {
 
 safe_wget_stdout() {
     wget -q -T "$NET_TIMEOUT" -t "$NET_TRIES" -O- "$1" 2>/dev/null
+}
+
+
+term_cols() {
+    local c
+    c=$(tput cols 2>/dev/null || true)
+    [[ "$c" =~ ^[0-9]+$ ]] || c=80
+    (( c < 50 )) && c=50
+    (( c > 120 )) && c=120
+    printf '%s' "$c"
+}
+
+repeat_char() {
+    local n="$1" ch="$2" out=""
+    while (( n > 0 )); do out+="$ch"; n=$((n - 1)); done
+    printf '%s' "$out"
+}
+
+progress_line() {
+    local current="$1" total="$2" label="$3" route="${4:-}" width=28 pct filled empty
+    (( total > 0 )) || total=1
+    pct=$(( current * 100 / total ))
+    (( pct > 100 )) && pct=100
+    filled=$(( pct * width / 100 ))
+    empty=$(( width - filled ))
+    printf '\r\033[K\033[1;33m[\033[1;32m%s\033[1;37m%s\033[1;33m]\033[0m %3d%% [%d/%d] %s %s' \
+        "$(repeat_char "$filled" '#')" "$(repeat_char "$empty" '-')" "$pct" "$current" "$total" "$label" "$route"
+}
+
+fetch_with_activity() {
+    local url="$1" dest="$2" current="$3" total="$4" label="$5" route="$6"
+    local pid rc elapsed=0 frame=0
+    local -a spin=('|' '/' '-' '\\')
+
+    safe_wget "$url" "$dest" &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        progress_line "$current" "$total" "$label" "${route} ${spin[frame%4]} ${elapsed}s"
+        frame=$((frame + 1))
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    wait "$pid"
+    rc=$?
+    printf '\r\033[K'
+    return "$rc"
+}
+
+server_error_file() {
+    local f="$1" text
+    [[ -s "$f" ]] || return 0
+    text=$(head -c 160 "$f" 2>/dev/null | tr -d '\r\n')
+    case "$text" in
+        'KEY INVALIDA!'*|'IP DIFERENTE - ACCESO BLOQUEADO'*|'ARCHIVO NO DISPONIBLE!'*|'ERROR PREPARANDO ARCHIVOS!'*|'ERROR LEYENDO ARCHIVO!'*) return 0 ;;
+    esac
+    return 1
+}
+
+
+run_cmd_activity() {
+    local label="$1" command="$2" pid rc elapsed=0 frame=0
+    local -a spin=('|' '/' '-' '\\')
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 900 bash -c "$command" >/dev/null 2>&1 &
+    else
+        bash -c "$command" >/dev/null 2>&1 &
+    fi
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        printf '\r\033[K\033[1;33m[%s]\033[0m %s - %ss' "${spin[frame%4]}" "$label" "$elapsed"
+        frame=$((frame + 1))
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    wait "$pid"; rc=$?
+    if (( rc == 0 )); then
+        printf '\r\033[K\033[1;32m[OK]\033[0m %s (%ss)\n' "$label" "$elapsed"
+    else
+        printf '\r\033[K\033[1;33m[AVISO]\033[0m %s no se completó; continuando.\n' "$label"
+    fi
+    return "$rc"
+}
+
+download_payload_file() {
+    local name="$1" dest="$2" current="$3" total="$4"
+    local direct="http://${KEY_HOSTPORT}/${REQUEST}/${name}"
+    local legacy="http://${IP}:81/${REQUEST}/${name}"
+
+    rm -f -- "$dest"
+    if fetch_with_activity "$direct" "$dest" "$((current-1))" "$total" "$name" '8888'; then
+        if ! server_error_file "$dest"; then
+            progress_line "$current" "$total" "$name" 'OK 8888'
+            printf '\n'
+            return 0
+        fi
+    fi
+
+    rm -f -- "$dest"
+    if fetch_with_activity "$legacy" "$dest" "$((current-1))" "$total" "$name" 'fallback 81'; then
+        if ! server_error_file "$dest"; then
+            progress_line "$current" "$total" "$name" 'OK 81'
+            printf '\n'
+            return 0
+        fi
+    fi
+
+    rm -f -- "$dest"
+    progress_line "$((current-1))" "$total" "$name" 'ERROR'
+    printf '\n'
+    return 1
 }
 
 translate_text() {
@@ -262,27 +373,18 @@ clear
 clear
 
 echo -e "$barra"
-msg -ama "\033[1;37mINSTALANDO COMPLEMENTOS FINALES POR FAVOR ESPERE....."
-echo -e "$barra"
-echo ""
-
-fun_bar "apt-get install net-tools -y"
-fun_bar "ufw disable"
-fun_bar "apt-get --fix-broken install -y"
-fun_bar "apt-get install lsof -y"
-fun_bar "apt-get install figlet -y"
-fun_bar "apt-get install bc -y"
-fun_bar "apt-get install python3 -y"
-fun_bar "apt-get install python3-pip -y"
-fun_bar "apt-get install php -y"
-fun_bar "apt-get update -y"
-fun_bar "apt-get install nodejs -y"
-fun_bar "apt-get install zip -y"
-fun_bar "apt-get install unzip -y"
-
+msg -ama "\033[1;37mPREPARANDO COMPLEMENTOS FINALES"
 echo -e "$barra"
 
-msg -ama "\033[1;37mCOMPLEMENTOS INSTALADOS CON EXITO"
+# REV7: el bootstrap ya instaló las dependencias esenciales. Aquí solo se
+# verifican/reparan extras sin repetir una docena de apt-get innecesarios.
+run_cmd_activity "Reparando dependencias" "apt-get --fix-broken install -y" || true
+command -v ufw >/dev/null 2>&1 && run_cmd_activity "Configurando firewall local" "ufw disable" || true
+command -v php >/dev/null 2>&1 || run_cmd_activity "Instalando PHP" "apt-get install -y php" || true
+command -v node >/dev/null 2>&1 || run_cmd_activity "Instalando NodeJS" "apt-get install -y nodejs" || true
+
+echo -e "$barra"
+msg -ama "\033[1;37mCOMPLEMENTOS PREPARADOS"
 
 fun_ip () {
 MIP=$(hostname -I 2>/dev/null | awk '{print $1}')
@@ -443,18 +545,16 @@ msg -bar2
 [[ ${#1} -gt 2 ]] && funcao_idioma || id="$1"
 }
 
-error_fun () {
+download_error_fun () {
 
-msg -bar2 && msg -verm "$(translate_text "Esta clave era de otro servidor, por lo tanto fue excluida") "
-
+msg -bar2
+msg -verm "La KEY fue validada, pero falló la entrega de archivos."
+msg -ama "No se eliminó la KEY. Revisa/actualiza http-server.sh en la VPS del generador."
+msg -ama "El instalador intentó primero TCP 8888 y después el fallback TCP 81."
 msg -bar2
 
 [[ -d ${SCPinstal} ]] && rm -rf ${SCPinstal}
-
-rm -rf diablo2020.sh
-rm -rf LuciferMX2019.sh
-
-exit 1
+exit 2
 }
 
 invalid_key () {
@@ -491,12 +591,23 @@ KEY_LIST="${KEY_PATH#*/}"
 KEY_LIST="${KEY_LIST%%/*}"
 KEY_URL="http://${KEY_HOSTPORT}/${KEY_ID}/${KEY_LIST}/${IP}"
 
-if safe_wget "$KEY_URL" "$HOME/lista-arq"; then
-    echo -e "\033[1;32m Verificando"
+if fetch_with_activity "$KEY_URL" "$HOME/lista-arq" 0 1 "Verificando KEY" "TCP 8888"; then
+    if server_error_file "$HOME/lista-arq"; then
+        cat "$HOME/lista-arq" 2>/dev/null || true
+        invalid_key
+        exit
+    fi
+    progress_line 1 1 "KEY válida" "OK"
+    printf '\n'
 else
     echo -e "\033[1;31m Sin respuesta del servidor de keys"
     invalid_key
     exit
+fi
+
+SERVER_REV=$(safe_wget_stdout "http://${KEY_HOSTPORT}/__golden_version" 2>/dev/null | tr -d '\r\n ' || true)
+if [[ "$SERVER_REV" != "REV7" ]]; then
+    msg -ama "Aviso: el servidor de keys no reporta REV7; se usará compatibilidad automática 8888/81."
 fi
 
 if grep -q "KEY INVALIDA!\|IP DIFERENTE - ACCESO BLOQUEADO" "$HOME/lista-arq" 2>/dev/null; then
@@ -525,7 +636,7 @@ REQUEST="$KEY_ID"
 
 pontos="."
 
-stopping="$(translate_text "Verificando Actualizaciones")"
+stopping="$(translate_text "Descargando archivos")"
 
 TOTAL_ARQ=$(tr ' \t' '\n' <"$HOME/lista-arq" | grep -cve '^$' 2>/dev/null || echo 0)
 CURRENT_ARQ=0
@@ -533,25 +644,18 @@ CURRENT_ARQ=0
 for arqx in $(cat "$HOME/lista-arq"); do
 
 CURRENT_ARQ=$((CURRENT_ARQ + 1))
-msg -verm "${stopping}: ${arqx} [${CURRENT_ARQ}/${TOTAL_ARQ}]"
-
 DEST="${SCPinstal}/${arqx}"
-DIRECT_URL="http://${KEY_HOSTPORT}/${REQUEST}/${arqx}"
-LEGACY_URL="http://${IP}:81/${REQUEST}/${arqx}"
 
-# REV6: primero descarga por el mismo puerto 8888. Si el generador todavía
-# es antiguo, conserva el puerto 81 como fallback. Ninguna ruta espera sin límite.
-if safe_wget "$DIRECT_URL" "$DEST" || safe_wget "$LEGACY_URL" "$DEST"; then
+# REV7: barra de progreso real por archivos + actividad visible durante cada red.
+# La KEY ya fue validada antes de entrar aquí, por lo que un fallo en este punto
+# se reporta como problema de entrega y nunca como "key inválida".
+if download_payload_file "${arqx}" "$DEST" "$CURRENT_ARQ" "$TOTAL_ARQ"; then
     verificar_arq "${arqx}"
 else
-    echo
     msg -verm "No se pudo descargar: ${arqx}"
-    msg -ama "Servidor 8888 y fallback 81 sin respuesta. Instalación detenida sin congelarse."
-    error_fun
+    msg -ama "La KEY es válida. El servidor de archivos no respondió por 8888 ni por 81."
+    download_error_fun
 fi
-
-tput cuu1 2>/dev/null
-tput dl1 2>/dev/null
 
 pontos+="."
 
