@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Golden System PRO - servidor HTTP de llaves (REV21 fast-bundle + stream-fix + self-healing + legacy)
+# Golden System PRO - servidor HTTP de llaves (REV23 fast-bundle + stream-fix + self-healing + legacy)
 # Compatible con Ubuntu/Debian antiguos y modernos que dispongan de Bash 4+.
 #
 # Modos:
@@ -212,7 +212,7 @@ handle_request() {
     IFS= read -r request_line || request_line=""
     request_line="${request_line%$'\r'}"
 
-    # REV21: consumir todos los encabezados HTTP antes de escribir la respuesta.
+    # REV23: consumir todos los encabezados HTTP antes de escribir la respuesta.
     # Evita bloqueos de tubería en kernels con buffers pequeños cuando socat
     # ejecuta el handler mediante EXEC y la respuesta supera ~16 KiB.
     local header_line
@@ -248,7 +248,7 @@ handle_request() {
         return 0
     fi
     if [[ "$path" == "__golden_version" ]]; then
-        http_reply 200 "OK" "REV21" "$method"
+        http_reply 200 "OK" "REV23" "$method"
         return 0
     fi
 
@@ -293,8 +293,8 @@ handle_request() {
         fi
     fi
 
-    # REV21: ruta rápida opcional. El bundle solo existe para keys nuevas creadas
-    # por REV21. Si no existe, el cliente vuelve automáticamente al flujo 43/43.
+    # REV23: ruta rápida opcional. El bundle solo existe para keys nuevas creadas
+    # por REV23. Si no existe, el cliente vuelve automáticamente al flujo 43/43.
     if [[ "$arq" == "$BUNDLE_NAME" || "$arq" == "$BUNDLE_META" ]]; then
         file="${key_dir}/${arq}"
         if [[ ! -f "$file" || -L "$file" || ! -f "${key_dir}/.fast" ]]; then
@@ -424,7 +424,7 @@ listen_server() {
     mkdir -p "$ROOT_DIR" "$WEB_ROOT" "$ALT_WEB_ROOT" || return 1
     log_msg INFO "iniciando listener puerto=$PORT"
 
-    # REV21: Python 3 es el listener principal. Lee la petición completa antes
+    # REV23: Python 3 es el listener principal. Lee la petición completa antes
     # de ejecutar el handler y evita el atasco observado exactamente a 16 KiB
     # con socat/EXEC en algunas VPS. Los archivos de Golden son pequeños y la
     # respuesta se envía mediante sendall().
@@ -433,7 +433,7 @@ listen_server() {
         return $?
     fi
 
-    # Fallback para instalaciones antiguas sin Python 3. El handler REV21
+    # Fallback para instalaciones antiguas sin Python 3. El handler REV23
     # consume todos los encabezados, reduciendo también el riesgo de deadlock.
     if command -v socat >/dev/null 2>&1; then
         exec socat -T 30 "TCP-LISTEN:${PORT},reuseaddr,fork" "EXEC:${SELF} --request"
@@ -478,7 +478,7 @@ check_install() {
         rc=1
     fi
     if (( rc == 0 )); then
-        echo "OK: Golden HTTP REV21 listo en puerto $PORT"
+        echo "OK: Golden HTTP REV23 listo en puerto $PORT"
     fi
     return "$rc"
 }
