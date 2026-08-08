@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GOLDEN ADM PRO - LuciferMX2019 REV16 / FAST PATH + fallback REV15 intacto
+# GOLDEN ADM PRO - LuciferMX2019 REV17 / FAST PATH + fallback REV15 intacto + APT universal
 cd $HOME
 
 SCPdir="/etc/newadm"
@@ -36,6 +36,108 @@ safe_wget() {
 
 safe_wget_stdout() {
     wget -q -T "$NET_TIMEOUT" -t "$NET_TRIES" -O- "$1" 2>/dev/null
+}
+
+
+# ---------------- APT UNIVERSAL / NO BLOQUEO ----------------
+APT_LOCK_WAIT="${GOLDEN_APT_LOCK_WAIT:-600}"
+APT_STEP_TIMEOUT="${GOLDEN_APT_STEP_TIMEOUT:-600}"
+
+apt_lock_pids_client() {
+    local -a locks=(/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock)
+    if command -v fuser >/dev/null 2>&1; then
+        fuser "${locks[@]}" 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -un || true
+    elif command -v lsof >/dev/null 2>&1; then
+        lsof -t -- "${locks[@]}" 2>/dev/null | sort -un || true
+    else
+        return 0
+    fi
+}
+
+wait_apt_client() {
+    local waited=0 pids=""
+    while :; do
+        pids=$(apt_lock_pids_client | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        [[ -z "$pids" ]] && return 0
+        sleep 3
+        waited=$((waited + 3))
+        (( waited < APT_LOCK_WAIT )) || return 1
+    done
+}
+
+apt_client() {
+    wait_apt_client || return 1
+    local -a opts=(-o DPkg::Lock::Timeout="$APT_LOCK_WAIT" -o Acquire::Retries=2 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -o Dpkg::Use-Pty=0 -o Dpkg::Options::=--force-confold)
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$APT_STEP_TIMEOUT" apt-get "${opts[@]}" "$@"
+    else
+        apt-get "${opts[@]}" "$@"
+    fi
+}
+
+pkg_installed_client() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'ok installed'; }
+pkg_available_client() {
+    local c
+    c=$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')
+    [[ -n "$c" && "$c" != '(none)' ]]
+}
+
+last_cmd_detail() {
+    local log="$1" line
+    line=$(tail -n 40 "$log" 2>/dev/null | grep -aE '^(Get:|Hit:|Ign:|Err:|Fetched |Selecting previously|Preparing to unpack|Unpacking |Setting up |Processing triggers|Reading package|Building dependency|Reading state)' | tail -n1 || true)
+    line=$(printf '%s' "$line" | tr '\r\n' '  ' | sed 's/[[:space:]]\+/ /g')
+    [[ ${#line} -gt 54 ]] && line="${line:0:51}..."
+    printf '%s' "$line"
+}
+
+run_exec_activity() {
+    local label="$1"; shift
+    local log status pid rc elapsed=0 frame=0 detail=""
+    local -a spin=('|' '/' '-' '\\')
+    log=$(mktemp /tmp/golden-final.XXXXXX)
+    status=$(mktemp /tmp/golden-final-status.XXXXXX)
+    rm -f "$status"
+    (
+        set +e
+        "$@"
+        rc=$?
+        printf '%s\n' "$rc" >"$status"
+        exit "$rc"
+    ) >"$log" 2>&1 &
+    pid=$!
+    while [[ ! -s "$status" ]]; do
+        (( elapsed % 2 == 0 )) && detail=$(last_cmd_detail "$log")
+        printf '\r\033[K\033[1;33m[%s]\033[0m %s - %ss' "${spin[frame%4]}" "$label" "$elapsed"
+        [[ -n "$detail" ]] && printf ' | %s' "$detail"
+        frame=$((frame + 1)); sleep 1; elapsed=$((elapsed + 1))
+        if ! kill -0 "$pid" 2>/dev/null && [[ ! -s "$status" ]]; then sleep 1; break; fi
+    done
+    wait "$pid" 2>/dev/null || true
+    rc=$(cat "$status" 2>/dev/null || printf '1')
+    [[ "$rc" =~ ^[0-9]+$ ]] || rc=1
+    rm -f "$log" "$status"
+    if (( rc == 0 )); then
+        printf '\r\033[K\033[1;32m[OK]\033[0m %s (%ss)\n' "$label" "$elapsed"
+    else
+        printf '\r\033[K\033[1;33m[AVISO]\033[0m %s no se completó; continuando.\n' "$label"
+    fi
+    return "$rc"
+}
+
+install_client_group() {
+    local label="$1" required="$2"; shift 2
+    local -a todo=(); local p
+    for p in "$@"; do
+        pkg_installed_client "$p" && continue
+        if pkg_available_client "$p"; then
+            todo+=("$p")
+        elif [[ "$required" == 1 ]]; then
+            echo "Paquete requerido no disponible: $p" >&2
+            return 1
+        fi
+    done
+    ((${#todo[@]})) || return 0
+    run_exec_activity "$label" apt_client install -y --no-install-recommends "${todo[@]}"
 }
 
 
@@ -114,27 +216,8 @@ server_error_file() {
 
 
 run_cmd_activity() {
-    local label="$1" command="$2" pid rc elapsed=0 frame=0
-    local -a spin=('|' '/' '-' '\\')
-    if command -v timeout >/dev/null 2>&1; then
-        timeout 900 bash -c "$command" >/dev/null 2>&1 &
-    else
-        bash -c "$command" >/dev/null 2>&1 &
-    fi
-    pid=$!
-    while jobs -pr | grep -Fxq "$pid"; do
-        printf '\r\033[K\033[1;33m[%s]\033[0m %s - %ss' "${spin[frame%4]}" "$label" "$elapsed"
-        frame=$((frame + 1))
-        sleep 1
-        elapsed=$((elapsed + 1))
-    done
-    wait "$pid"; rc=$?
-    if (( rc == 0 )); then
-        printf '\r\033[K\033[1;32m[OK]\033[0m %s (%ss)\n' "$label" "$elapsed"
-    else
-        printf '\r\033[K\033[1;33m[AVISO]\033[0m %s no se completó; continuando.\n' "$label"
-    fi
-    return "$rc"
+    local label="$1" command="$2"
+    run_exec_activity "$label" bash -c "$command"
 }
 
 refresh_legacy_stage() {
@@ -273,7 +356,7 @@ try_fast_bundle() {
     local expected_list archive_list name idx=0
 
     [[ "${GOLDEN_FAST_MODE:-1}" != "0" ]] || return 1
-    [[ "${SERVER_REV:-}" == "REV16" ]] || return 1
+    [[ "${SERVER_REV:-}" == "REV17" ]] || return 1
     command -v tar >/dev/null 2>&1 || return 1
     command -v sha256sum >/dev/null 2>&1 || return 1
 
@@ -298,7 +381,7 @@ try_fast_bundle() {
     actual_count=$(tr ' \t' '\n' <"$manifest" | grep -cve '^$' 2>/dev/null || echo 0)
     [[ "$actual_count" == "$expected_count" ]] || { rm -f -- "$meta"; return 1; }
 
-    msg -ama "Modo rápido REV16: descargando los ${expected_count} archivos en un solo paquete."
+    msg -ama "Modo rápido REV17: descargando los ${expected_count} archivos en un solo paquete."
     bundle_download_with_progress "$bundle_url" "$bundle" "$expected_size" || {
         rm -f -- "$meta" "$bundle"
         return 1
@@ -408,8 +491,14 @@ done
 echo -e "\033[1;33m]\033[1;31m -\033[1;32m 100%\033[1;37m"
 }
 
-[[ $(dpkg -l | grep -w gawk) ]] || apt-get install gawk -y &>/dev/null
-command -v locate >/dev/null 2>&1 || apt-get install plocate -y &>/dev/null || apt-get install mlocate -y &>/dev/null || true
+pkg_installed_client gawk || run_exec_activity "Instalando gawk" apt_client install -y --no-install-recommends gawk || true
+if ! command -v locate >/dev/null 2>&1; then
+    if pkg_available_client plocate; then
+        run_exec_activity "Instalando locate" apt_client install -y --no-install-recommends plocate || true
+    elif pkg_available_client mlocate; then
+        run_exec_activity "Instalando locate" apt_client install -y --no-install-recommends mlocate || true
+    fi
+fi
 
 
 msg () {
@@ -588,12 +677,11 @@ echo -e "$barra"
 msg -ama "\033[1;37mPREPARANDO COMPLEMENTOS FINALES"
 echo -e "$barra"
 
-# REV7: el bootstrap ya instaló las dependencias esenciales. Aquí solo se
-# verifican/reparan extras sin repetir una docena de apt-get innecesarios.
-run_cmd_activity "Reparando dependencias" "apt-get --fix-broken install -y" || true
-command -v ufw >/dev/null 2>&1 && run_cmd_activity "Configurando firewall local" "ufw disable" || true
-command -v php >/dev/null 2>&1 || run_cmd_activity "Instalando PHP" "apt-get install -y php" || true
-command -v node >/dev/null 2>&1 || run_cmd_activity "Instalando NodeJS" "apt-get install -y nodejs" || true
+# REV17: no instalar PHP/Node/compiladores durante el arranque. No son
+# necesarios para abrir Golden y cada módulo instala sus dependencias cuando
+# se utiliza. Esto conserva funciones y acelera Debian/Ubuntu recién creados.
+run_exec_activity "Reparando dependencias" apt_client --fix-broken install -y || true
+command -v ufw >/dev/null 2>&1 && run_exec_activity "Configurando firewall local" ufw disable || true
 
 echo -e "$barra"
 msg -ama "\033[1;37mCOMPLEMENTOS PREPARADOS"
@@ -609,27 +697,26 @@ fi
 }
 
 inst_components () {
+    install_client_group "Componentes esenciales" 1 nano bc screen python3 curl unzip zip lsof apache2 || return 1
+    install_client_group "Componentes opcionales" 0 ufw python3-pip net-tools jq || true
 
-[[ $(dpkg -l | grep -w nano) ]] || apt-get install nano -y &>/dev/null
-[[ $(dpkg -l | grep -w bc) ]] || apt-get install bc -y &>/dev/null
-[[ $(dpkg -l | grep -w screen) ]] || apt-get install screen -y &>/dev/null
-[[ $(dpkg -l | grep -w python3) ]] || apt-get install python3 -y &>/dev/null
+    # Mantener la lógica histórica: Apache de Golden escucha en 81. Hacerlo de
+    # forma idempotente para configuraciones antiguas y modernas.
+    if [[ -f /etc/apache2/ports.conf ]]; then
+        if grep -Eq '^[[:space:]]*Listen[[:space:]]+80([[:space:]]*)$' /etc/apache2/ports.conf; then
+            sed -Ei 's/^[[:space:]]*Listen[[:space:]]+80([[:space:]]*)$/Listen 81/' /etc/apache2/ports.conf
+        elif ! grep -Eq '^[[:space:]]*Listen[[:space:]]+81([[:space:]]*)$' /etc/apache2/ports.conf; then
+            printf '\nListen 81\n' >>/etc/apache2/ports.conf
+        fi
+    fi
 
-apt-get install python3-pip -y &>/dev/null
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl restart apache2 >/dev/null 2>&1 || service apache2 restart >/dev/null 2>&1 || true
+    else
+        service apache2 restart >/dev/null 2>&1 || /etc/init.d/apache2 restart >/dev/null 2>&1 || true
+    fi
 
-[[ $(dpkg -l | grep -w curl) ]] || apt-get install curl -y &>/dev/null
-[[ $(dpkg -l | grep -w ufw) ]] || apt-get install ufw -y &>/dev/null
-[[ $(dpkg -l | grep -w unzip) ]] || apt-get install unzip -y &>/dev/null
-[[ $(dpkg -l | grep -w zip) ]] || apt-get install zip -y &>/dev/null
-[[ $(dpkg -l | grep -w lsof) ]] || apt-get install lsof -y &>/dev/null
-
-apt-get install apache2 -y &>/dev/null
-
-sed -i "s;Listen 80;Listen 81;g" /etc/apache2/ports.conf > /dev/null 2>&1
-
-systemctl restart apache2 2>/dev/null || service apache2 restart > /dev/null 2>&1
-
-[[ $(dpkg -l | grep -w apache2) ]]
+    pkg_installed_client apache2
 }
 
 funcao_idioma () {
@@ -857,12 +944,12 @@ stopping="$(translate_text "Descargando archivos")"
 TOTAL_ARQ=$(tr ' \t' '\n' <"$HOME/lista-arq" | grep -cve '^$' 2>/dev/null || echo 0)
 CURRENT_ARQ=0
 
-# REV16 FAST PATH: una sola descarga comprimida y validada. Si cualquier paso
+# REV17 FAST PATH: una sola descarga comprimida y validada. Si cualquier paso
 # falla, se conserva exactamente el flujo individual REV15 como fallback.
 if try_fast_bundle "$REQUEST" "$HOME/lista-arq"; then
     :
 else
-    [[ "${SERVER_REV:-}" == "REV16" ]] && msg -ama "Modo rápido no disponible; continuando con método estable archivo por archivo."
+    [[ "${SERVER_REV:-}" == "REV17" ]] && msg -ama "Modo rápido no disponible; continuando con método estable archivo por archivo."
     rm -rf -- "$SCPinstal"
     mkdir -p "$SCPinstal"
 
