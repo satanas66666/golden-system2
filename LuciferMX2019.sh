@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
-# GOLDEN ADM PRO - LuciferMX2019 REV17 / FAST PATH + fallback REV15 intacto + APT universal
+# GOLDEN ADM PRO - LuciferMX2019 REV18 / FAST PATH + fallback REV15 intacto + APT universal
 cd $HOME
+
+# REV18: esta segunda etapa puede ejecutarse directamente o desde el bootstrap.
+# Forzar modo no interactivo evita prompts de needrestart/ucf/apt-listchanges.
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+export APT_LISTCHANGES_FRONTEND=none
+export UCF_FORCE_CONFFOLD=1
+export SYSTEMD_PAGER=cat
 
 SCPdir="/etc/newadm"
 SCPdir2="${SCPdir}/v2ray"
@@ -356,7 +364,7 @@ try_fast_bundle() {
     local expected_list archive_list name idx=0
 
     [[ "${GOLDEN_FAST_MODE:-1}" != "0" ]] || return 1
-    [[ "${SERVER_REV:-}" == "REV17" ]] || return 1
+    [[ "${SERVER_REV:-}" == "REV18" ]] || return 1
     command -v tar >/dev/null 2>&1 || return 1
     command -v sha256sum >/dev/null 2>&1 || return 1
 
@@ -381,7 +389,7 @@ try_fast_bundle() {
     actual_count=$(tr ' \t' '\n' <"$manifest" | grep -cve '^$' 2>/dev/null || echo 0)
     [[ "$actual_count" == "$expected_count" ]] || { rm -f -- "$meta"; return 1; }
 
-    msg -ama "Modo rápido REV17: descargando los ${expected_count} archivos en un solo paquete."
+    msg -ama "Modo rápido REV18: descargando los ${expected_count} archivos en un solo paquete."
     bundle_download_with_progress "$bundle_url" "$bundle" "$expected_size" || {
         rm -f -- "$meta" "$bundle"
         return 1
@@ -677,7 +685,7 @@ echo -e "$barra"
 msg -ama "\033[1;37mPREPARANDO COMPLEMENTOS FINALES"
 echo -e "$barra"
 
-# REV17: no instalar PHP/Node/compiladores durante el arranque. No son
+# REV18: no instalar PHP/Node/compiladores durante el arranque. No son
 # necesarios para abrir Golden y cada módulo instala sus dependencias cuando
 # se utiliza. Esto conserva funciones y acelera Debian/Ubuntu recién creados.
 run_exec_activity "Reparando dependencias" apt_client --fix-broken install -y || true
@@ -697,8 +705,14 @@ fi
 }
 
 inst_components () {
-    install_client_group "Componentes esenciales" 1 nano bc screen python3 curl unzip zip lsof apache2 || return 1
-    install_client_group "Componentes opcionales" 0 ufw python3-pip net-tools jq || true
+    # REV18: el bootstrap ya instala utilidades comunes (jq/net-tools, etc.).
+    # Aquí solo garantizamos el núcleo imprescindible para abrir Golden.
+    # NO instalar ufw ni python3-pip durante el arranque: pip no es usado por
+    # el núcleo y ufw puede ejecutar hooks/servicios que en algunas imágenes
+    # Debian/Ubuntu tardan varios minutos. Los módulos que realmente necesitan
+    # ufw lo instalan al ser utilizados.
+    install_client_group "Núcleo final Golden" 1 nano bc screen python3 curl unzip zip lsof apache2 || return 1
+    msg -verd "Extras pesados diferidos: UFW/PIP se instalarán solo si un módulo los necesita."
 
     # Mantener la lógica histórica: Apache de Golden escucha en 81. Hacerlo de
     # forma idempotente para configuraciones antiguas y modernas.
@@ -944,12 +958,12 @@ stopping="$(translate_text "Descargando archivos")"
 TOTAL_ARQ=$(tr ' \t' '\n' <"$HOME/lista-arq" | grep -cve '^$' 2>/dev/null || echo 0)
 CURRENT_ARQ=0
 
-# REV17 FAST PATH: una sola descarga comprimida y validada. Si cualquier paso
+# REV18 FAST PATH: una sola descarga comprimida y validada. Si cualquier paso
 # falla, se conserva exactamente el flujo individual REV15 como fallback.
 if try_fast_bundle "$REQUEST" "$HOME/lista-arq"; then
     :
 else
-    [[ "${SERVER_REV:-}" == "REV17" ]] && msg -ama "Modo rápido no disponible; continuando con método estable archivo por archivo."
+    [[ "${SERVER_REV:-}" == "REV18" ]] && msg -ama "Modo rápido no disponible; continuando con método estable archivo por archivo."
     rm -rf -- "$SCPinstal"
     mkdir -p "$SCPinstal"
 
