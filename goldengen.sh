@@ -14,7 +14,7 @@ export NEEDRESTART_MODE=a
 export LC_ALL=C
 export LANG=C
 
-REPO_DEFAULT="https://raw.githubusercontent.com/satanas66666/golden-system/main"
+REPO_DEFAULT="https://raw.githubusercontent.com/satanas66666/golden-system2/main"
 REPO="${GOLDEN_REPO:-$REPO_DEFAULT}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 TMP_DIR=""
