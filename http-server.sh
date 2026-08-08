@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Golden System PRO - servidor HTTP de llaves
+# Golden System PRO - servidor HTTP de llaves (REV4 legacy compatible)
 # Compatible con Ubuntu/Debian antiguos y modernos que dispongan de Bash 4+.
 #
 # Modos:
@@ -191,10 +191,22 @@ handle_request() {
     path="${target%%\?*}"
     path="${path#/}"
 
-    IFS='/' read -r key arq extra <<<"$path"
+    # Formatos admitidos:
+    #   NUEVO : /KEY/orp-nedlog
+    #   LEGACY: /KEY/orp-nedlog/IP-DEL-CLIENTE
+    # El instalador histórico LuciferMX2019.sh añade la IP del cliente al final.
+    # La autorización real usa la IP del socket (peer_ip); el tercer segmento se
+    # acepta únicamente por compatibilidad y nunca se confía en él.
+    local legacy_ip extra
+    IFS='/' read -r key arq legacy_ip extra <<<"$path"
     if [[ -n "${extra:-}" ]] || ! safe_component "${key:-}" || ! safe_component "${arq:-}"; then
         http_reply 200 "OK" "KEY INVALIDA!" "$method"
         log_msg WARN "ruta invalida peer=$(peer_ip) request=$request_line"
+        return 0
+    fi
+    if [[ -n "${legacy_ip:-}" && ! "$legacy_ip" =~ ^[0-9A-Fa-f:.]+$ ]]; then
+        http_reply 200 "OK" "KEY INVALIDA!" "$method"
+        log_msg WARN "segmento legacy invalido peer=$(peer_ip) request=$request_line"
         return 0
     fi
     if [[ "$arq" != "$INSTALL_LIST" && "$arq" != "$TOOL_LIST" ]]; then
