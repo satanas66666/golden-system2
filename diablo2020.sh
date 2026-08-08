@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GOLDEN ADM PRO - bootstrap REV7
+# GOLDEN ADM PRO - bootstrap REV8
 # Ubuntu/Debian con APT. Progreso visible, espera segura de locks y timeouts.
 
 set -u
@@ -89,6 +89,13 @@ run_activity() {
 
 wait_apt() {
     local waited=0 max_wait=300
+
+    # En instalaciones mínimas puede no existir fuser todavía. apt-get ya usa
+    # DPkg::Lock::Timeout, así que no debemos abortar por esa ausencia.
+    if ! command -v fuser >/dev/null 2>&1; then
+        return 0
+    fi
+
     while fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1; do
         (( waited == 0 )) && msg info "APT/DPKG está ocupado; esperando sin borrar locks..."
         printf '\r\033[KEsperando APT/DPKG: %ss / %ss' "$waited" "$max_wait"
@@ -100,7 +107,11 @@ wait_apt() {
             return 1
         fi
     done
-    (( waited > 0 )) && printf '\r\033[KAPT/DPKG libre después de %ss.\n' "$waited"
+
+    if (( waited > 0 )); then
+        printf '\r\033[KAPT/DPKG libre después de %ss.\n' "$waited"
+    fi
+    return 0
 }
 
 apt_run() {
@@ -128,13 +139,18 @@ safe_wget() {
 
 clear 2>/dev/null || true
 echo "======================================================================"
-echo "             GOLDEN ADM PRO - INSTALADOR REV7"
+echo "             GOLDEN ADM PRO - INSTALADOR REV8"
 echo "======================================================================"
 echo "Sistema : ${PRETTY_NAME:-$ID}"
 echo "Fase    : Preparando instalación"
 echo "======================================================================"
 
-wait_apt || exit 1
+msg info "Comprobando estado de APT/DPKG"
+if ! wait_apt; then
+    msg err "No fue posible obtener acceso seguro a APT/DPKG."
+    exit 1
+fi
+msg ok "APT/DPKG disponible"
 run_activity "Reconfigurando DPKG" dpkg --configure -a || true
 
 run_activity "Actualizando repositorios" apt_run update -y || {
