@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# GOLDEN ADM PRO - LuciferMX2019 REV18 / FAST PATH + fallback REV15 intacto + APT universal
+# GOLDEN ADM PRO - LuciferMX2019 REV21 / FAST PATH + fallback REV21 intacto + APT universal
 cd $HOME
 
-# REV18: esta segunda etapa puede ejecutarse directamente o desde el bootstrap.
+# REV21: esta segunda etapa puede ejecutarse directamente o desde el bootstrap.
 # Forzar modo no interactivo evita prompts de needrestart/ucf/apt-listchanges.
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
@@ -50,6 +50,7 @@ safe_wget_stdout() {
 # ---------------- APT UNIVERSAL / NO BLOQUEO ----------------
 APT_LOCK_WAIT="${GOLDEN_APT_LOCK_WAIT:-600}"
 APT_STEP_TIMEOUT="${GOLDEN_APT_STEP_TIMEOUT:-600}"
+ACTIVITY_TIMEOUT="${GOLDEN_ACTIVITY_TIMEOUT:-900}"
 
 apt_lock_pids_client() {
     local -a locks=(/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock)
@@ -118,6 +119,17 @@ run_exec_activity() {
         printf '\r\033[K\033[1;33m[%s]\033[0m %s - %ss' "${spin[frame%4]}" "$label" "$elapsed"
         [[ -n "$detail" ]] && printf ' | %s' "$detail"
         frame=$((frame + 1)); sleep 1; elapsed=$((elapsed + 1))
+        if (( elapsed >= ACTIVITY_TIMEOUT )); then
+            printf '\n'
+            echo "[TIMEOUT] $label superó ${ACTIVITY_TIMEOUT}s; se detiene para evitar un bloqueo infinito." >&2
+            pkill -TERM -P "$pid" 2>/dev/null || true
+            kill -TERM "$pid" 2>/dev/null || true
+            sleep 2
+            pkill -KILL -P "$pid" 2>/dev/null || true
+            kill -KILL "$pid" 2>/dev/null || true
+            printf '124\n' >"$status"
+            break
+        fi
         if ! kill -0 "$pid" 2>/dev/null && [[ ! -s "$status" ]]; then sleep 1; break; fi
     done
     wait "$pid" 2>/dev/null || true
@@ -180,7 +192,7 @@ fetch_with_activity() {
     local pid rc elapsed=0 frame=0
     local -a spin=('|' '/' '-' '\\')
 
-    # REV15: propagar allow_empty hasta safe_wget. REV14 lo recibía en
+    # REV21: propagar allow_empty hasta safe_wget. REV21 lo recibía en
     # payload_fetch pero lo perdía en esta función intermedia, por lo que
     # PDirect.py (0 bytes legítimos) siempre terminaba en ERROR.
     safe_wget "$url" "$dest" "$allow_empty" &
@@ -260,7 +272,7 @@ download_payload_file() {
     # Aceptarlo explícitamente evita confundirlo con una descarga truncada.
     [[ "$name" == "PDirect.py" ]] && allow_empty=1
 
-    # REV15: intentar siempre la entrega directa por 8888. No dependemos del
+    # REV21: intentar siempre la entrega directa por 8888. No dependemos del
     # texto de versión para decidir capacidades: si un servidor antiguo no
     # soporta /KEY/archivo, la respuesta se descarta y se usa el fallback 81.
     rm -f -- "$dest"
@@ -364,7 +376,7 @@ try_fast_bundle() {
     local expected_list archive_list name idx=0
 
     [[ "${GOLDEN_FAST_MODE:-1}" != "0" ]] || return 1
-    [[ "${SERVER_REV:-}" == "REV18" ]] || return 1
+    [[ "${SERVER_REV:-}" == "REV21" ]] || return 1
     command -v tar >/dev/null 2>&1 || return 1
     command -v sha256sum >/dev/null 2>&1 || return 1
 
@@ -389,7 +401,7 @@ try_fast_bundle() {
     actual_count=$(tr ' \t' '\n' <"$manifest" | grep -cve '^$' 2>/dev/null || echo 0)
     [[ "$actual_count" == "$expected_count" ]] || { rm -f -- "$meta"; return 1; }
 
-    msg -ama "Modo rápido REV18: descargando los ${expected_count} archivos en un solo paquete."
+    msg -ama "Modo rápido REV21: descargando los ${expected_count} archivos en un solo paquete."
     bundle_download_with_progress "$bundle_url" "$bundle" "$expected_size" || {
         rm -f -- "$meta" "$bundle"
         return 1
@@ -472,31 +484,8 @@ rm -rf /etc/localtime &>/dev/null
 ln -s /usr/share/zoneinfo/America/Mexico_City /etc/localtime &>/dev/null
 
 fun_bar () {
-comando="$1"
-(
-[[ -e $HOME/fim ]] && rm $HOME/fim
-if command -v timeout >/dev/null 2>&1; then timeout 900 bash -c "$comando" > /dev/null 2>&1; else bash -c "$comando" > /dev/null 2>&1; fi
-touch $HOME/fim
-) &
-
-echo -ne "\033[1;33m ["
-
-while true; do
-   for((i=0; i<18; i++)); do
-   echo -ne "\033[1;31m##"
-   sleep 0.1
-   done
-
-   [[ -e $HOME/fim ]] && rm $HOME/fim && break
-
-   echo -e "\033[1;33m]"
-   sleep 1
-   tput cuu1 2>/dev/null
-   tput dl1 2>/dev/null
-   echo -ne "\033[1;33m ["
-done
-
-echo -e "\033[1;33m]\033[1;31m -\033[1;32m 100%\033[1;37m"
+    local comando="${1:-true}"
+    run_cmd_activity "Procesando" "$comando"
 }
 
 pkg_installed_client gawk || run_exec_activity "Instalando gawk" apt_client install -y --no-install-recommends gawk || true
@@ -685,7 +674,7 @@ echo -e "$barra"
 msg -ama "\033[1;37mPREPARANDO COMPLEMENTOS FINALES"
 echo -e "$barra"
 
-# REV18: no instalar PHP/Node/compiladores durante el arranque. No son
+# REV21: no instalar PHP/Node/compiladores durante el arranque. No son
 # necesarios para abrir Golden y cada módulo instala sus dependencias cuando
 # se utiliza. Esto conserva funciones y acelera Debian/Ubuntu recién creados.
 run_exec_activity "Reparando dependencias" apt_client --fix-broken install -y || true
@@ -705,7 +694,7 @@ fi
 }
 
 inst_components () {
-    # REV18: el bootstrap ya instala utilidades comunes (jq/net-tools, etc.).
+    # REV21: el bootstrap ya instala utilidades comunes (jq/net-tools, etc.).
     # Aquí solo garantizamos el núcleo imprescindible para abrir Golden.
     # NO instalar ufw ni python3-pip durante el arranque: pip no es usado por
     # el núcleo y ufw puede ejecutar hooks/servicios que en algunas imágenes
@@ -804,6 +793,29 @@ done
 echo "$txtofus" | rev
 }
 
+migrar_nombres_protocolos() {
+    mkdir -p "$SCPinst"
+    local old new pair
+    for pair in \
+        'budp.sh:badvpn.sh' \
+        'shadowsocksLive.sh:proxygo.sh' \
+        'ssrrmu.sh:haproxy.sh' \
+        'shadown.sh:hysteria.sh' \
+        'shadowsock.sh:slowdns.sh' \
+        'sockspy.sh:websocket.sh'; do
+        old="${pair%%:*}"; new="${pair#*:}"
+        if [[ -e "$SCPinst/$old" ]]; then
+            if [[ ! -e "$SCPinst/$new" ]]; then
+                mv -f -- "$SCPinst/$old" "$SCPinst/$new" 2>/dev/null || true
+            else
+                rm -f -- "$SCPinst/$old"
+            fi
+        fi
+    done
+}
+
+migrar_nombres_protocolos
+
 verificar_arq () {
 
 [[ ! -d ${SCPdir} ]] && mkdir ${SCPdir}
@@ -823,7 +835,7 @@ fi
 case $1 in
 "menu"|"message.txt")ARQ="${SCPdir}/";;
 "usercodes")ARQ="${SCPusr}/";;
-"openssh.sh"|"squid.sh"|"dropbear.sh"|"openvpn.sh"|"ssl.sh"|"shadowsocksLive.sh"|"shadown.sh"|"budp.sh"|"shadowsock.sh"|"ssrrmu.sh"|"shadowsocks.sh"|"v2ray.sh"|"sockspy.sh"|"PDirect.py"|"PPub.py"|"PPriv.py"|"POpen.py"|"PGet.py") ARQ="${SCPinst}/";;
+"openssh.sh"|"squid.sh"|"dropbear.sh"|"openvpn.sh"|"ssl.sh"|"proxygo.sh"|"hysteria.sh"|"badvpn.sh"|"slowdns.sh"|"haproxy.sh"|"shadowsocks.sh"|"v2ray.sh"|"websocket.sh"|"PDirect.py"|"PPub.py"|"PPriv.py"|"POpen.py"|"PGet.py") ARQ="${SCPinst}/";;
 *)ARQ="${SCPfrm}/";;
 esac
 
@@ -837,12 +849,12 @@ fun_ip
 safe_wget "https://www.dropbox.com/s/dzknghcgew54pc6/trans" /usr/bin/trans || true
 
 safe_wget "https://raw.githubusercontent.com/satanas66666/golden-system2/main/limv2ray" /usr/bin/limv2ray || \
-    safe_wget "https://raw.githubusercontent.com/satanas66666/golden-system/main/limv2ray" /usr/bin/limv2ray || true
+    safe_wget "https://raw.githubusercontent.com/satanas66666/golden-system2/main/limv2ray" /usr/bin/limv2ray || true
 
 [[ -s /usr/bin/limv2ray ]] && chmod +x /usr/bin/limv2ray
 
 safe_wget "https://raw.githubusercontent.com/satanas66666/golden-system2/main/Desbloqueo.sh" /bin/Desbloqueo.sh || \
-    safe_wget "https://raw.githubusercontent.com/satanas66666/golden-system/refs/heads/main/Desbloqueo.sh" /bin/Desbloqueo.sh || true
+    safe_wget "https://raw.githubusercontent.com/satanas66666/golden-system2/main/Desbloqueo.sh" /bin/Desbloqueo.sh || true
 
 [[ -s /bin/Desbloqueo.sh ]] && chmod +x /bin/Desbloqueo.sh
 
@@ -958,12 +970,12 @@ stopping="$(translate_text "Descargando archivos")"
 TOTAL_ARQ=$(tr ' \t' '\n' <"$HOME/lista-arq" | grep -cve '^$' 2>/dev/null || echo 0)
 CURRENT_ARQ=0
 
-# REV18 FAST PATH: una sola descarga comprimida y validada. Si cualquier paso
-# falla, se conserva exactamente el flujo individual REV15 como fallback.
+# REV21 FAST PATH: una sola descarga comprimida y validada. Si cualquier paso
+# falla, se conserva exactamente el flujo individual REV21 como fallback.
 if try_fast_bundle "$REQUEST" "$HOME/lista-arq"; then
     :
 else
-    [[ "${SERVER_REV:-}" == "REV18" ]] && msg -ama "Modo rápido no disponible; continuando con método estable archivo por archivo."
+    [[ "${SERVER_REV:-}" == "REV21" ]] && msg -ama "Modo rápido no disponible; continuando con método estable archivo por archivo."
     rm -rf -- "$SCPinstal"
     mkdir -p "$SCPinstal"
 
@@ -972,7 +984,7 @@ else
     CURRENT_ARQ=$((CURRENT_ARQ + 1))
     DEST="${SCPinstal}/${arqx}"
 
-    # Fallback REV15 SIN CAMBIOS: 8888 -> 81 -> 8888 final.
+    # Fallback REV21 SIN CAMBIOS: 8888 -> 81 -> 8888 final.
     if download_payload_file "${arqx}" "$DEST" "$CURRENT_ARQ" "$TOTAL_ARQ"; then
         verificar_arq "${arqx}"
     else
