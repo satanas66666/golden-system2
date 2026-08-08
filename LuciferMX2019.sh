@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# GOLDEN ADM PRO - LuciferMX2019 REV24 / FAST PATH + fallback REV24 intacto + APT universal
+# GOLDEN ADM PRO - LuciferMX2019 REV25 / FAST PATH + fallback REV25 intacto + APT universal
 cd $HOME
 
-# REV24: esta segunda etapa puede ejecutarse directamente o desde el bootstrap.
+# REV25: esta segunda etapa puede ejecutarse directamente o desde el bootstrap.
 # Forzar modo no interactivo evita prompts de needrestart/ucf/apt-listchanges.
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
@@ -186,6 +186,129 @@ install_client_group_no_autostart() {
     run_exec_activity "$label" apt_client_install_no_autostart "${todo[@]}"
 }
 
+
+# REV25: Apache de Golden usa exclusivamente TCP 81. Esta función elimina
+# listeners HTTP en 80 de Apache (sin tocar otros servicios), migra VirtualHost
+# :80 -> :81, valida la configuración y deja respaldo antes de modificarla.
+apache_force_port_81_config() {
+    local root="/etc/apache2"
+    local backup="/var/backups/golden-apache-port81-$(date +%Y%m%d-%H%M%S).tar.gz"
+    [[ -d "$root" && -f "$root/ports.conf" ]] || {
+        echo "[ERROR] No existe una instalación Apache válida en $root." >&2
+        return 1
+    }
+    mkdir -p /var/backups
+    tar -C /etc -czf "$backup" apache2 >/dev/null 2>&1 || {
+        echo "[ERROR] No se pudo crear respaldo de Apache." >&2
+        return 1
+    }
+
+    if ! python3 - "$root" <<'PYAPACHE'
+from pathlib import Path
+import re, sys
+root = Path(sys.argv[1])
+
+# Solo tocamos directivas que controlan escucha/VHost. No cambiamos ProxyPass,
+# URLs, destinos internos ni cualquier otro uso legítimo del puerto 80.
+files = []
+for rel in ('ports.conf',):
+    p = root / rel
+    if p.exists(): files.append(p)
+for dname in ('conf-available','conf-enabled','sites-available','sites-enabled'):
+    d = root / dname
+    if d.is_dir():
+        files.extend(p for p in d.iterdir() if p.is_file() or p.is_symlink())
+
+seen = set()
+for p in files:
+    try:
+        rp = p.resolve()
+    except Exception:
+        rp = p
+    if rp in seen or not rp.exists() or not rp.is_file():
+        continue
+    seen.add(rp)
+    try:
+        text = rp.read_text(encoding='utf-8')
+    except UnicodeDecodeError:
+        continue
+    out = []
+    changed = False
+    for line in text.splitlines(True):
+        body = line.rstrip('\r\n')
+        nl = line[len(body):]
+        # Listen 80 / Listen 0.0.0.0:80 / Listen [::]:80 / Listen *:80
+        m = re.match(r'^(\s*Listen\s+)80(\s*(?:#.*)?)$', body, re.I)
+        m2 = re.match(r'^(\s*Listen\s+)(\[[^\]]+\]|[^\s:]+):80(\s*(?:#.*)?)$', body, re.I)
+        if m or m2:
+            # Se comenta para garantizar que Apache no reserve TCP 80.
+            out.append('# Golden REV25: movido a TCP 81 | ' + body + nl)
+            changed = True
+            continue
+        # Apache 2.2 puede tener NameVirtualHost *:80.
+        if re.match(r'^\s*NameVirtualHost\s+', body, re.I) and ':80' in body:
+            body = re.sub(r':80(?=\s|$)', ':81', body)
+            changed = True
+        # VHosts de Apache en 80 pasan a 81. Esto no cambia backends/proxies.
+        if re.match(r'^\s*<VirtualHost\s+', body, re.I) and ':80' in body:
+            body = re.sub(r':80(?=\s|>)', ':81', body)
+            changed = True
+        out.append(body + nl)
+    if changed:
+        rp.write_text(''.join(out), encoding='utf-8')
+
+ports = root / 'ports.conf'
+text = ports.read_text(encoding='utf-8', errors='ignore')
+active81 = False
+for ln in text.splitlines():
+    if ln.lstrip().startswith('#'):
+        continue
+    if re.match(r'^\s*Listen\s+(?:\[[^\]]+\]:|[^\s:]+:)?81\s*(?:#.*)?$', ln, re.I):
+        active81 = True
+        break
+if not active81:
+    with ports.open('a', encoding='utf-8') as f:
+        f.write('\n# Golden System PRO REV25 - Apache exclusivo en TCP 81\nListen 81\n')
+PYAPACHE
+    then
+        echo "[ERROR] No se pudo migrar la configuración Apache a TCP 81." >&2
+        return 1
+    fi
+
+    # Validación antes de reiniciar. Si falla, restauramos automáticamente.
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 20 apache2ctl configtest >/tmp/golden-apache-configtest.log 2>&1 || {
+            rm -rf /etc/apache2
+            tar -C /etc -xzf "$backup" >/dev/null 2>&1 || true
+            echo "[ERROR] Apache configtest falló; configuración restaurada." >&2
+            cat /tmp/golden-apache-configtest.log >&2 2>/dev/null || true
+            return 1
+        }
+    else
+        apache2ctl configtest >/tmp/golden-apache-configtest.log 2>&1 || {
+            rm -rf /etc/apache2
+            tar -C /etc -xzf "$backup" >/dev/null 2>&1 || true
+            echo "[ERROR] Apache configtest falló; configuración restaurada." >&2
+            cat /tmp/golden-apache-configtest.log >&2 2>/dev/null || true
+            return 1
+        }
+    fi
+    return 0
+}
+
+apache_process_listens() {
+    local port="$1"
+    if command -v ss >/dev/null 2>&1; then
+        ss -H -lntp 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" && $0 ~ /apache2/ {found=1} END{exit !found}'
+        return $?
+    fi
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR>1 && $1 ~ /^apache2?$/ {found=1} END{exit !found}'
+        return $?
+    fi
+    return 2
+}
+
 apache_restart_golden() {
     local rc=1
     if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
@@ -253,7 +376,7 @@ fetch_with_activity() {
     local pid rc elapsed=0 frame=0
     local -a spin=('|' '/' '-' '\\')
 
-    # REV24: propagar allow_empty hasta safe_wget. REV24 lo recibía en
+    # REV25: propagar allow_empty hasta safe_wget. REV25 lo recibía en
     # payload_fetch pero lo perdía en esta función intermedia, por lo que
     # PDirect.py (0 bytes legítimos) siempre terminaba en ERROR.
     safe_wget "$url" "$dest" "$allow_empty" &
@@ -333,7 +456,7 @@ download_payload_file() {
     # Aceptarlo explícitamente evita confundirlo con una descarga truncada.
     [[ "$name" == "PDirect.py" ]] && allow_empty=1
 
-    # REV24: intentar siempre la entrega directa por 8888. No dependemos del
+    # REV25: intentar siempre la entrega directa por 8888. No dependemos del
     # texto de versión para decidir capacidades: si un servidor antiguo no
     # soporta /KEY/archivo, la respuesta se descarta y se usa el fallback 81.
     rm -f -- "$dest"
@@ -437,7 +560,7 @@ try_fast_bundle() {
     local expected_list archive_list name idx=0
 
     [[ "${GOLDEN_FAST_MODE:-1}" != "0" ]] || return 1
-    [[ "${SERVER_REV:-}" == "REV24" ]] || return 1
+    [[ "${SERVER_REV:-}" == "REV25" ]] || return 1
     command -v tar >/dev/null 2>&1 || return 1
     command -v sha256sum >/dev/null 2>&1 || return 1
 
@@ -462,7 +585,7 @@ try_fast_bundle() {
     actual_count=$(tr ' \t' '\n' <"$manifest" | grep -cve '^$' 2>/dev/null || echo 0)
     [[ "$actual_count" == "$expected_count" ]] || { rm -f -- "$meta"; return 1; }
 
-    msg -ama "Modo rápido REV24: descargando los ${expected_count} archivos en un solo paquete."
+    msg -ama "Modo rápido REV25: descargando los ${expected_count} archivos en un solo paquete."
     bundle_download_with_progress "$bundle_url" "$bundle" "$expected_size" || {
         rm -f -- "$meta" "$bundle"
         return 1
@@ -735,7 +858,7 @@ echo -e "$barra"
 msg -ama "\033[1;37mPREPARANDO COMPLEMENTOS FINALES"
 echo -e "$barra"
 
-# REV24: no instalar PHP/Node/compiladores durante el arranque. No son
+# REV25: no instalar PHP/Node/compiladores durante el arranque. No son
 # necesarios para abrir Golden y cada módulo instala sus dependencias cuando
 # se utiliza. Esto conserva funciones y acelera Debian/Ubuntu recién creados.
 run_exec_activity "Reparando dependencias" apt_client --fix-broken install -y || true
@@ -755,7 +878,7 @@ fi
 }
 
 inst_components () {
-    # REV24: el bootstrap ya instaló el núcleo ANTES de pedir la key. Aquí no
+    # REV25: el bootstrap ya instaló el núcleo ANTES de pedir la key. Aquí no
     # repetimos un apt-get grande después de transferir los 43 archivos.
     # Solo reparamos una ejecución directa/legacy si realmente falta algo.
     local p
@@ -773,14 +896,10 @@ inst_components () {
 
     msg -verd "Núcleo Golden verificado; no se repite APT después de la KEY."
 
-    # Apache de Golden escucha en 81. Configuración idempotente.
-    if [[ -f /etc/apache2/ports.conf ]]; then
-        if grep -Eq '^[[:space:]]*Listen[[:space:]]+80([[:space:]]*)$' /etc/apache2/ports.conf; then
-            sed -Ei 's/^[[:space:]]*Listen[[:space:]]+80([[:space:]]*)$/Listen 81/' /etc/apache2/ports.conf
-        elif ! grep -Eq '^[[:space:]]*Listen[[:space:]]+81([[:space:]]*)$' /etc/apache2/ports.conf; then
-            printf '\nListen 81\n' >>/etc/apache2/ports.conf
-        fi
-    fi
+    # REV25: Apache queda EXCLUSIVAMENTE en TCP 81. No basta con añadir
+    # Listen 81: hay que retirar cualquier listener Apache en 80 y migrar
+    # VirtualHost *:80, incluyendo variantes de Debian/Ubuntu viejos.
+    apache_force_port_81_config || return 1
 
     if ! apache_restart_golden; then
         echo "[ERROR] Apache no pudo reiniciarse en un máximo de 35s." >&2
@@ -789,12 +908,17 @@ inst_components () {
         return 1
     fi
 
-    if command -v ss >/dev/null 2>&1; then
-        ss -lnt 2>/dev/null | grep -qE '[:.]81[[:space:]]' || {
-            echo "[ERROR] Apache arrancó pero TCP 81 no aparece escuchando." >&2
-            return 1
-        }
+    if apache_process_listens 81; then
+        msg -verd "Apache verificado en TCP 81."
+    else
+        echo "[ERROR] Apache arrancó pero no se detectó escuchando en TCP 81." >&2
+        return 1
     fi
+    if apache_process_listens 80; then
+        echo "[ERROR] Apache todavía está reservando TCP 80; instalación detenida para no ocupar ese puerto." >&2
+        return 1
+    fi
+    msg -verd "TCP 80 quedó libre de Apache para otros servicios."
     return 0
 }
 funcao_idioma () {
@@ -1068,12 +1192,12 @@ stopping="$(translate_text "Descargando archivos")"
 TOTAL_ARQ=$(tr ' \t' '\n' <"$HOME/lista-arq" | grep -cve '^$' 2>/dev/null || echo 0)
 CURRENT_ARQ=0
 
-# REV24 FAST PATH: una sola descarga comprimida y validada. Si cualquier paso
-# falla, se conserva exactamente el flujo individual REV24 como fallback.
+# REV25 FAST PATH: una sola descarga comprimida y validada. Si cualquier paso
+# falla, se conserva exactamente el flujo individual REV25 como fallback.
 if try_fast_bundle "$REQUEST" "$HOME/lista-arq"; then
     :
 else
-    [[ "${SERVER_REV:-}" == "REV24" ]] && msg -ama "Modo rápido no disponible; continuando con método estable archivo por archivo."
+    [[ "${SERVER_REV:-}" == "REV25" ]] && msg -ama "Modo rápido no disponible; continuando con método estable archivo por archivo."
     rm -rf -- "$SCPinstal"
     mkdir -p "$SCPinstal"
 
@@ -1082,7 +1206,7 @@ else
     CURRENT_ARQ=$((CURRENT_ARQ + 1))
     DEST="${SCPinstal}/${arqx}"
 
-    # Fallback REV24 SIN CAMBIOS: 8888 -> 81 -> 8888 final.
+    # Fallback REV25 SIN CAMBIOS: 8888 -> 81 -> 8888 final.
     if download_payload_file "${arqx}" "$DEST" "$CURRENT_ARQ" "$TOTAL_ARQ"; then
         verificar_arq "${arqx}"
     else
@@ -1141,5 +1265,4 @@ else
 invalid_key
 
 fi
-
 
