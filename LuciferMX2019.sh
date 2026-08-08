@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GOLDEN ADM PRO - LuciferMX2019 REV15 / transferencia integral validada
+# GOLDEN ADM PRO - LuciferMX2019 REV16 / FAST PATH + fallback REV15 intacto
 cd $HOME
 
 SCPdir="/etc/newadm"
@@ -210,6 +210,150 @@ download_payload_file() {
     progress_line "$((current-1))" "$total" "$name" 'ERROR'
     printf '\n'
     return 1
+}
+
+bundle_download_with_progress() {
+    local url="$1" dest="$2" expected="$3" tmp pid rc current pct width=28 filled empty elapsed=0
+    tmp="${dest}.part.$$"
+    rm -f -- "$tmp"
+
+    if command -v curl >/dev/null 2>&1; then
+        if command -v timeout >/dev/null 2>&1; then
+            timeout 120 curl -fL -sS --connect-timeout 8 --max-time 110 -o "$tmp" "$url" >/dev/null 2>&1 &
+        else
+            curl -fL -sS --connect-timeout 8 --max-time 110 -o "$tmp" "$url" >/dev/null 2>&1 &
+        fi
+    else
+        if command -v timeout >/dev/null 2>&1; then
+            timeout 120 wget -q -T 10 -t 2 -O "$tmp" "$url" >/dev/null 2>&1 &
+        else
+            wget -q -T 10 -t 2 -O "$tmp" "$url" >/dev/null 2>&1 &
+        fi
+    fi
+    pid=$!
+
+    while jobs -pr | grep -Fxq "$pid"; do
+        if [[ -f "$tmp" ]]; then
+            current=$(wc -c <"$tmp" 2>/dev/null || printf '0')
+        else
+            current=0
+        fi
+        [[ "$current" =~ ^[0-9]+$ ]] || current=0
+        if [[ "$expected" =~ ^[0-9]+$ ]] && (( expected > 0 )); then
+            pct=$(( current * 100 / expected ))
+            (( pct > 99 )) && pct=99
+        else
+            pct=0
+        fi
+        filled=$(( pct * width / 100 )); empty=$((width-filled))
+        printf '\r\033[K\033[1;33m[\033[1;32m%s\033[1;37m%s\033[1;33m]\033[0m %3d%% Paquete rápido (%ss)' \
+            "$(repeat_char "$filled" '#')" "$(repeat_char "$empty" '-')" "$pct" "$elapsed"
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    wait "$pid"; rc=$?
+    printf '\r\033[K'
+
+    if (( rc != 0 )) || [[ ! -f "$tmp" ]]; then
+        rm -f -- "$tmp"
+        return 1
+    fi
+    current=$(wc -c <"$tmp" 2>/dev/null || printf '0')
+    if [[ "$expected" =~ ^[0-9]+$ ]] && (( expected >= 0 )) && [[ "$current" != "$expected" ]]; then
+        rm -f -- "$tmp"
+        return 1
+    fi
+    mv -f -- "$tmp" "$dest"
+    printf '\033[1;32m[%s] 100%%\033[0m Paquete rápido (%s bytes)\n' "$(repeat_char "$width" '#')" "$current"
+    return 0
+}
+
+try_fast_bundle() {
+    local key="$1" manifest="$2" meta bundle meta_url bundle_url expected_hash expected_size expected_count actual_hash actual_count
+    local expected_list archive_list name idx=0
+
+    [[ "${GOLDEN_FAST_MODE:-1}" != "0" ]] || return 1
+    [[ "${SERVER_REV:-}" == "REV16" ]] || return 1
+    command -v tar >/dev/null 2>&1 || return 1
+    command -v sha256sum >/dev/null 2>&1 || return 1
+
+    meta="$HOME/.golden-bundle.meta.$$"
+    bundle="$HOME/.golden-bundle.tgz.$$"
+    expected_list="$HOME/.golden-expected.$$"
+    archive_list="$HOME/.golden-archive.$$"
+    rm -f -- "$meta" "$bundle" "$expected_list" "$archive_list"
+
+    meta_url="http://${KEY_HOSTPORT}/${key}/golden-bundle.meta"
+    bundle_url="http://${KEY_HOSTPORT}/${key}/golden-bundle.tgz"
+
+    safe_wget "$meta_url" "$meta" || { rm -f -- "$meta"; return 1; }
+    server_error_file "$meta" && { rm -f -- "$meta"; return 1; }
+
+    expected_hash=$(awk -F= '$1=="sha256"{print $2; exit}' "$meta" | tr -d '\r\n ')
+    expected_size=$(awk -F= '$1=="size"{print $2; exit}' "$meta" | tr -d '\r\n ')
+    expected_count=$(awk -F= '$1=="count"{print $2; exit}' "$meta" | tr -d '\r\n ')
+    [[ "$expected_hash" =~ ^[0-9a-fA-F]{64}$ ]] || { rm -f -- "$meta"; return 1; }
+    [[ "$expected_size" =~ ^[0-9]+$ && "$expected_count" =~ ^[0-9]+$ ]] || { rm -f -- "$meta"; return 1; }
+
+    actual_count=$(tr ' \t' '\n' <"$manifest" | grep -cve '^$' 2>/dev/null || echo 0)
+    [[ "$actual_count" == "$expected_count" ]] || { rm -f -- "$meta"; return 1; }
+
+    msg -ama "Modo rápido REV16: descargando los ${expected_count} archivos en un solo paquete."
+    bundle_download_with_progress "$bundle_url" "$bundle" "$expected_size" || {
+        rm -f -- "$meta" "$bundle"
+        return 1
+    }
+
+    actual_hash=$(sha256sum "$bundle" | awk '{print $1}')
+    if [[ "$actual_hash" != "$expected_hash" ]]; then
+        msg -ama "El paquete rápido no pasó SHA-256; usando método estable individual."
+        rm -f -- "$meta" "$bundle"
+        return 1
+    fi
+
+    tr ' \t' '\n' <"$manifest" | grep -ve '^$' | LC_ALL=C sort -u >"$expected_list"
+    if ! tar -tzf "$bundle" 2>/dev/null | sed 's#^\./##' | awk '
+        $0 == "" || $0 == "." || $0 == ".." || $0 ~ /\// || $0 !~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/ { bad=1 }
+        { print }
+        END { if (bad) exit 2 }
+    ' | LC_ALL=C sort -u >"$archive_list"; then
+        rm -f -- "$meta" "$bundle" "$expected_list" "$archive_list"
+        return 1
+    fi
+    if ! cmp -s "$expected_list" "$archive_list"; then
+        rm -f -- "$meta" "$bundle" "$expected_list" "$archive_list"
+        return 1
+    fi
+
+    rm -rf -- "$SCPinstal"
+    mkdir -p "$SCPinstal"
+    if ! tar -xzf "$bundle" -C "$SCPinstal" --no-same-owner 2>/dev/null; then
+        rm -rf -- "$SCPinstal"
+        mkdir -p "$SCPinstal"
+        rm -f -- "$meta" "$bundle" "$expected_list" "$archive_list"
+        return 1
+    fi
+
+    while IFS= read -r name || [[ -n "$name" ]]; do
+        [[ -n "$name" ]] || continue
+        [[ -f "$SCPinstal/$name" ]] || {
+            rm -rf -- "$SCPinstal"; mkdir -p "$SCPinstal"
+            rm -f -- "$meta" "$bundle" "$expected_list" "$archive_list"
+            return 1
+        }
+    done <"$expected_list"
+
+    for name in $(cat "$manifest"); do
+        [[ -n "$name" ]] || continue
+        idx=$((idx + 1))
+        progress_line "$idx" "$expected_count" "$name" 'INSTALANDO LOCAL'
+        verificar_arq "$name"
+    done
+    printf '\n'
+
+    rm -f -- "$meta" "$bundle" "$expected_list" "$archive_list"
+    msg -verd "Modo rápido completado: paquete verificado por SHA-256."
+    return 0
 }
 
 translate_text() {
@@ -679,7 +823,7 @@ SERVER_REV=$(safe_wget_stdout "http://${KEY_HOSTPORT}/__golden_version" 2>/dev/n
 if [[ -z "$SERVER_REV" ]]; then
     msg -ama "Servidor sin identificador de versión; se probará TCP 8888 y fallback TCP 81 automáticamente."
 else
-    msg -ama "Servidor de keys: ${SERVER_REV}. Transferencia automática 8888/81 habilitada."
+    msg -ama "Servidor de keys: ${SERVER_REV}. Transferencia rápida + fallback estable habilitados."
 fi
 
 if grep -q "KEY INVALIDA!\|IP DIFERENTE - ACCESO BLOQUEADO" "$HOME/lista-arq" 2>/dev/null; then
@@ -713,25 +857,33 @@ stopping="$(translate_text "Descargando archivos")"
 TOTAL_ARQ=$(tr ' \t' '\n' <"$HOME/lista-arq" | grep -cve '^$' 2>/dev/null || echo 0)
 CURRENT_ARQ=0
 
-for arqx in $(cat "$HOME/lista-arq"); do
-
-CURRENT_ARQ=$((CURRENT_ARQ + 1))
-DEST="${SCPinstal}/${arqx}"
-
-# REV7: barra de progreso real por archivos + actividad visible durante cada red.
-# La KEY ya fue validada antes de entrar aquí, por lo que un fallo en este punto
-# se reporta como problema de entrega y nunca como "key inválida".
-if download_payload_file "${arqx}" "$DEST" "$CURRENT_ARQ" "$TOTAL_ARQ"; then
-    verificar_arq "${arqx}"
+# REV16 FAST PATH: una sola descarga comprimida y validada. Si cualquier paso
+# falla, se conserva exactamente el flujo individual REV15 como fallback.
+if try_fast_bundle "$REQUEST" "$HOME/lista-arq"; then
+    :
 else
-    msg -verm "No se pudo descargar: ${arqx}"
-    msg -ama "La KEY es válida. El servidor de archivos no respondió por 8888 ni por 81."
-    download_error_fun
+    [[ "${SERVER_REV:-}" == "REV16" ]] && msg -ama "Modo rápido no disponible; continuando con método estable archivo por archivo."
+    rm -rf -- "$SCPinstal"
+    mkdir -p "$SCPinstal"
+
+    for arqx in $(cat "$HOME/lista-arq"); do
+
+    CURRENT_ARQ=$((CURRENT_ARQ + 1))
+    DEST="${SCPinstal}/${arqx}"
+
+    # Fallback REV15 SIN CAMBIOS: 8888 -> 81 -> 8888 final.
+    if download_payload_file "${arqx}" "$DEST" "$CURRENT_ARQ" "$TOTAL_ARQ"; then
+        verificar_arq "${arqx}"
+    else
+        msg -verm "No se pudo descargar: ${arqx}"
+        msg -ama "La KEY es válida. El servidor de archivos no respondió por 8888 ni por 81."
+        download_error_fun
+    fi
+
+    pontos+="."
+
+    done
 fi
-
-pontos+="."
-
-done
 
 sleep 1s
 
