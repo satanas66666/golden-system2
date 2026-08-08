@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# GOLDEN ADM PRO - LuciferMX2019 REV23 / FAST PATH + fallback REV23 intacto + APT universal
+# GOLDEN ADM PRO - LuciferMX2019 REV24 / FAST PATH + fallback REV24 intacto + APT universal
 cd $HOME
 
-# REV23: esta segunda etapa puede ejecutarse directamente o desde el bootstrap.
+# REV24: esta segunda etapa puede ejecutarse directamente o desde el bootstrap.
 # Forzar modo no interactivo evita prompts de needrestart/ucf/apt-listchanges.
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
@@ -144,6 +144,67 @@ run_exec_activity() {
     return "$rc"
 }
 
+apt_client_install_no_autostart() {
+    local created_policy=0 backup=""
+    if [[ -e /usr/sbin/policy-rc.d ]]; then
+        backup=$(mktemp /tmp/golden-client-policy.XXXXXX)
+        cp -a /usr/sbin/policy-rc.d "$backup" 2>/dev/null || backup=""
+    else
+        cat >/usr/sbin/policy-rc.d <<'EOF_POLICY'
+#!/bin/sh
+exit 101
+EOF_POLICY
+        chmod 0755 /usr/sbin/policy-rc.d
+        created_policy=1
+    fi
+
+    local rc=0
+    apt_client install -y --no-install-recommends "$@" || rc=$?
+
+    if (( created_policy == 1 )); then
+        rm -f /usr/sbin/policy-rc.d
+    elif [[ -n "$backup" && -e "$backup" ]]; then
+        cp -a "$backup" /usr/sbin/policy-rc.d 2>/dev/null || true
+        rm -f "$backup"
+    fi
+    return "$rc"
+}
+
+install_client_group_no_autostart() {
+    local label="$1" required="$2"; shift 2
+    local -a todo=(); local p
+    for p in "$@"; do
+        pkg_installed_client "$p" && continue
+        if pkg_available_client "$p"; then
+            todo+=("$p")
+        elif [[ "$required" == 1 ]]; then
+            echo "Paquete requerido no disponible: $p" >&2
+            return 1
+        fi
+    done
+    ((${#todo[@]})) || return 0
+    run_exec_activity "$label" apt_client_install_no_autostart "${todo[@]}"
+}
+
+apache_restart_golden() {
+    local rc=1
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+        if command -v timeout >/dev/null 2>&1; then
+            timeout 35 systemctl restart apache2 >/dev/null 2>&1 && rc=0 || rc=$?
+        else
+            systemctl restart apache2 >/dev/null 2>&1 && rc=0 || rc=$?
+        fi
+    fi
+    if (( rc != 0 )); then
+        if command -v timeout >/dev/null 2>&1; then
+            timeout 35 service apache2 restart >/dev/null 2>&1 && rc=0 || rc=$?
+        else
+            service apache2 restart >/dev/null 2>&1 && rc=0 || rc=$?
+        fi
+    fi
+    return "$rc"
+}
+
 install_client_group() {
     local label="$1" required="$2"; shift 2
     local -a todo=(); local p
@@ -192,7 +253,7 @@ fetch_with_activity() {
     local pid rc elapsed=0 frame=0
     local -a spin=('|' '/' '-' '\\')
 
-    # REV23: propagar allow_empty hasta safe_wget. REV23 lo recibía en
+    # REV24: propagar allow_empty hasta safe_wget. REV24 lo recibía en
     # payload_fetch pero lo perdía en esta función intermedia, por lo que
     # PDirect.py (0 bytes legítimos) siempre terminaba en ERROR.
     safe_wget "$url" "$dest" "$allow_empty" &
@@ -272,7 +333,7 @@ download_payload_file() {
     # Aceptarlo explícitamente evita confundirlo con una descarga truncada.
     [[ "$name" == "PDirect.py" ]] && allow_empty=1
 
-    # REV23: intentar siempre la entrega directa por 8888. No dependemos del
+    # REV24: intentar siempre la entrega directa por 8888. No dependemos del
     # texto de versión para decidir capacidades: si un servidor antiguo no
     # soporta /KEY/archivo, la respuesta se descarta y se usa el fallback 81.
     rm -f -- "$dest"
@@ -376,7 +437,7 @@ try_fast_bundle() {
     local expected_list archive_list name idx=0
 
     [[ "${GOLDEN_FAST_MODE:-1}" != "0" ]] || return 1
-    [[ "${SERVER_REV:-}" == "REV23" ]] || return 1
+    [[ "${SERVER_REV:-}" == "REV24" ]] || return 1
     command -v tar >/dev/null 2>&1 || return 1
     command -v sha256sum >/dev/null 2>&1 || return 1
 
@@ -401,7 +462,7 @@ try_fast_bundle() {
     actual_count=$(tr ' \t' '\n' <"$manifest" | grep -cve '^$' 2>/dev/null || echo 0)
     [[ "$actual_count" == "$expected_count" ]] || { rm -f -- "$meta"; return 1; }
 
-    msg -ama "Modo rápido REV23: descargando los ${expected_count} archivos en un solo paquete."
+    msg -ama "Modo rápido REV24: descargando los ${expected_count} archivos en un solo paquete."
     bundle_download_with_progress "$bundle_url" "$bundle" "$expected_size" || {
         rm -f -- "$meta" "$bundle"
         return 1
@@ -674,7 +735,7 @@ echo -e "$barra"
 msg -ama "\033[1;37mPREPARANDO COMPLEMENTOS FINALES"
 echo -e "$barra"
 
-# REV23: no instalar PHP/Node/compiladores durante el arranque. No son
+# REV24: no instalar PHP/Node/compiladores durante el arranque. No son
 # necesarios para abrir Golden y cada módulo instala sus dependencias cuando
 # se utiliza. Esto conserva funciones y acelera Debian/Ubuntu recién creados.
 run_exec_activity "Reparando dependencias" apt_client --fix-broken install -y || true
@@ -694,17 +755,25 @@ fi
 }
 
 inst_components () {
-    # REV23: el bootstrap ya instala utilidades comunes (jq/net-tools, etc.).
-    # Aquí solo garantizamos el núcleo imprescindible para abrir Golden.
-    # NO instalar ufw ni python3-pip durante el arranque: pip no es usado por
-    # el núcleo y ufw puede ejecutar hooks/servicios que en algunas imágenes
-    # Debian/Ubuntu tardan varios minutos. Los módulos que realmente necesitan
-    # ufw lo instalan al ser utilizados.
-    install_client_group "Núcleo final Golden" 1 nano bc screen python3 curl unzip zip lsof apache2 || return 1
-    msg -verd "Extras pesados diferidos: UFW/PIP se instalarán solo si un módulo los necesita."
+    # REV24: el bootstrap ya instaló el núcleo ANTES de pedir la key. Aquí no
+    # repetimos un apt-get grande después de transferir los 43 archivos.
+    # Solo reparamos una ejecución directa/legacy si realmente falta algo.
+    local p
+    local -a missing=()
+    for p in nano bc screen python3 curl unzip zip lsof; do
+        pkg_installed_client "$p" || missing+=("$p")
+    done
+    if ((${#missing[@]})); then
+        install_client_group "Núcleo faltante" 1 "${missing[@]}" || return 1
+    fi
 
-    # Mantener la lógica histórica: Apache de Golden escucha en 81. Hacerlo de
-    # forma idempotente para configuraciones antiguas y modernas.
+    if ! pkg_installed_client apache2; then
+        install_client_group_no_autostart "Apache faltante" 1 apache2 || return 1
+    fi
+
+    msg -verd "Núcleo Golden verificado; no se repite APT después de la KEY."
+
+    # Apache de Golden escucha en 81. Configuración idempotente.
     if [[ -f /etc/apache2/ports.conf ]]; then
         if grep -Eq '^[[:space:]]*Listen[[:space:]]+80([[:space:]]*)$' /etc/apache2/ports.conf; then
             sed -Ei 's/^[[:space:]]*Listen[[:space:]]+80([[:space:]]*)$/Listen 81/' /etc/apache2/ports.conf
@@ -713,15 +782,21 @@ inst_components () {
         fi
     fi
 
-    if command -v systemctl >/dev/null 2>&1; then
-        systemctl restart apache2 >/dev/null 2>&1 || service apache2 restart >/dev/null 2>&1 || true
-    else
-        service apache2 restart >/dev/null 2>&1 || /etc/init.d/apache2 restart >/dev/null 2>&1 || true
+    if ! apache_restart_golden; then
+        echo "[ERROR] Apache no pudo reiniciarse en un máximo de 35s." >&2
+        command -v apache2ctl >/dev/null 2>&1 && apache2ctl -t >&2 || true
+        command -v systemctl >/dev/null 2>&1 && systemctl status apache2 --no-pager -l 2>/dev/null | tail -n 20 >&2 || true
+        return 1
     fi
 
-    pkg_installed_client apache2
+    if command -v ss >/dev/null 2>&1; then
+        ss -lnt 2>/dev/null | grep -qE '[:.]81[[:space:]]' || {
+            echo "[ERROR] Apache arrancó pero TCP 81 no aparece escuchando." >&2
+            return 1
+        }
+    fi
+    return 0
 }
-
 funcao_idioma () {
     if command -v figlet >/dev/null 2>&1; then
         if command -v lolcat >/dev/null 2>&1; then
@@ -993,12 +1068,12 @@ stopping="$(translate_text "Descargando archivos")"
 TOTAL_ARQ=$(tr ' \t' '\n' <"$HOME/lista-arq" | grep -cve '^$' 2>/dev/null || echo 0)
 CURRENT_ARQ=0
 
-# REV23 FAST PATH: una sola descarga comprimida y validada. Si cualquier paso
-# falla, se conserva exactamente el flujo individual REV23 como fallback.
+# REV24 FAST PATH: una sola descarga comprimida y validada. Si cualquier paso
+# falla, se conserva exactamente el flujo individual REV24 como fallback.
 if try_fast_bundle "$REQUEST" "$HOME/lista-arq"; then
     :
 else
-    [[ "${SERVER_REV:-}" == "REV23" ]] && msg -ama "Modo rápido no disponible; continuando con método estable archivo por archivo."
+    [[ "${SERVER_REV:-}" == "REV24" ]] && msg -ama "Modo rápido no disponible; continuando con método estable archivo por archivo."
     rm -rf -- "$SCPinstal"
     mkdir -p "$SCPinstal"
 
@@ -1007,7 +1082,7 @@ else
     CURRENT_ARQ=$((CURRENT_ARQ + 1))
     DEST="${SCPinstal}/${arqx}"
 
-    # Fallback REV23 SIN CAMBIOS: 8888 -> 81 -> 8888 final.
+    # Fallback REV24 SIN CAMBIOS: 8888 -> 81 -> 8888 final.
     if download_payload_file "${arqx}" "$DEST" "$CURRENT_ARQ" "$TOTAL_ARQ"; then
         verificar_arq "${arqx}"
     else
@@ -1047,7 +1122,11 @@ chmod +x /usr/bin/adm
 
 instalar_logo_login
 
-inst_components
+if ! inst_components; then
+    msg -verm "Falló la preparación final del núcleo Golden."
+    msg -ama "La KEY y los 43 archivos están correctos; revisa el diagnóstico mostrado arriba."
+    exit 4
+fi
 
 echo "$Key" > ${SCPdir}/key.txt
 
@@ -1062,4 +1141,5 @@ else
 invalid_key
 
 fi
+
 
