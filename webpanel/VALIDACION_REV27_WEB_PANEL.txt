@@ -1,0 +1,99 @@
+GOLDEN ADM PRO WEB CONTROL CENTER V1 - REV27
+VALIDACION DE LABORATORIO
+============================================
+
+BASE USADA
+----------
+Golden_System_PRO_COMPLETO_REV26_3_HYSTERIA_FIX.zip
+SHA-256 base: 3598e77bf636d2e888ec917d447091ea05b6245038e2384dd90c0b9002507946
+
+REGLA DE INTEGRIDAD
+-------------------
+La base REV26.3 NO fue modificada para construir el panel.
+El Web Panel es un complemento separado.
+No se modificó:
+- /bin/gerar de la base
+- golden.zip REV26.3
+- http-server.sh
+- Apache 81
+- servidor 8888
+- Fast Bundle / SHA-256
+- protocolos cliente
+
+PRUEBAS REALIZADAS
+------------------
+[OK] gofmt backend
+[OK] gofmt bridge
+[OK] go test ./...
+[OK] Compilación CGO_ENABLED=0 Linux AMD64
+[OK] Compilación CGO_ENABLED=0 Linux ARM64
+[OK] Compilación CGO_ENABLED=0 Linux 386
+[OK] Los 6 binarios son ELF estáticos (sin dependencia glibc)
+[OK] Backend --self-test
+[OK] Bridge --self-test
+[OK] JavaScript principal validado con node --check
+[OK] Bash syntax: instalar_webpanel.sh
+[OK] Bash syntax: instalar_webpanel_remoto.sh
+[OK] Bash syntax: desinstalar_webpanel.sh
+[OK] Bash syntax: validar_webpanel.sh
+
+PRUEBA DE BRIDGE EN FILESYSTEM AISLADO
+--------------------------------------
+[OK] Dashboard/stats
+[OK] Listado de keys
+[OK] Crear key completa llamando al mismo flujo gerar --create (gerar simulado en test)
+[OK] Crear key con IP fija
+[OK] Listar herramientas adicionales
+[OK] Seleccionar herramientas adicionales por nombre -> índice del gerar
+[OK] Cambiar IP fija
+[OK] Actualizar message.txt
+[OK] Marcar key usada y limpiar usadas
+[OK] Borrar filesystem de key sin rutas arbitrarias
+[OK] Validación estricta de ID de key e IP
+
+PRUEBA HTTPS/API AISLADA
+------------------------
+[OK] Servidor TLS levanta
+[OK] GET /api/health
+[OK] Login correcto
+[OK] Cookie Secure + HttpOnly + SameSite=Strict
+[OK] Sesión autenticada
+[OK] Dashboard autenticado
+[OK] CSRF bloquea POST sin token (HTTP 403)
+[OK] Logout
+
+SEGURIDAD IMPLEMENTADA
+----------------------
+[OK] Backend web corre como usuario golden-web, no root
+[OK] Acciones root únicamente mediante bridge con sudoers restringido
+[OK] El bridge no implementa shell/exec arbitrario solicitado por navegador
+[OK] Contraseña PBKDF2-HMAC-SHA256, 300,000 iteraciones + salt aleatorio
+[OK] Rate-limit/bloqueo temporal después de múltiples logins fallidos
+[OK] CSRF para acciones de escritura
+[OK] CSP/X-Frame-Options/nosniff/SameSite
+[OK] Audit log de login y acciones
+[OK] Puerto web configurable, 8443 default
+[OK] Instalador rechaza 80, 81 y 8888
+
+PUERTOS
+-------
+80   : NO TOCADO por Web Panel
+81   : NO TOCADO (Apache Golden)
+8888 : NO TOCADO (servidor keys)
+8443 : Web Panel HTTPS por defecto
+
+LIMITACION DE ESTA VALIDACION
+-----------------------------
+Estas pruebas fueron hechas en laboratorio local y filesystem simulado.
+Todavía NO se afirma que REV27 haya sido instalada en la VPS real del generador del usuario.
+La primera instalación real debe hacerse como complemento opcional, validando primero:
+1. gerar sigue abriendo por SSH.
+2. El panel inicia en 8443.
+3. Las keys existentes aparecen iguales en ambos accesos.
+4. Crear una key web crea la misma estructura /etc/http-shell.
+5. Crear una key SSH aparece inmediatamente en el panel.
+
+ESTADO
+------
+APROBADO PARA PRUEBA REAL CONTROLADA EN VPS DEL GENERADOR.
+NO integrar todavía automáticamente dentro de goldengen.sh hasta validar en VPS real.
