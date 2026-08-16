@@ -168,3 +168,36 @@ Mientras el panel esté en prueba:
 - Los arreglos del panel deben permanecer en la carpeta webpanel.
 - Cuando quede validado en VPS real, se podrá agregar una opción opcional en gerar:
   "Administrar Panel Web" sin tocar el motor de keys.
+
+============================================================
+REV27.3 - HTTPS CONFIABLE + RECORDAR LOGIN
+============================================================
+
+1) RECORDAR CONTRASEÑA / INICIO DE SESIÓN
+La pantalla de login incluye "Recordar contraseña".
+- Si está desmarcado: la cookie es de sesión y el servidor limita la sesión normal.
+- Si está marcado: la cookie segura puede durar hasta 30 días.
+- El panel NO guarda la contraseña en localStorage ni en texto plano.
+- Solo recuerda el nombre de usuario localmente; el gestor de contraseñas del navegador puede guardar la credencial usando autocomplete estándar.
+
+2) QUITAR ADVERTENCIA DEL CERTIFICADO AL ENTRAR POR IP
+A partir de 2026 Let's Encrypt permite certificados públicos para direcciones IP.
+Los certificados IP son de corta duración, por lo que la renovación DEBE estar automatizada.
+
+Ejecuta como root:
+  bash activar_https_confiable_ip_REV27_3.sh
+
+Requisitos:
+- IP pública accesible desde Internet.
+- TCP 80 libre y accesible para la validación ACME y futuras renovaciones.
+- Python 3.10+ si el script necesita instalar Certbot moderno.
+
+El script:
+- usa/instala Certbot >=5.4;
+- solicita un certificado short-lived para la IP;
+- copia cert/key a /etc/golden-web;
+- conserva el panel en 8443;
+- reinicia golden-web;
+- configura comprobación de renovación cada 6 horas.
+
+No cambia /bin/gerar, /etc/http-shell, /etc/SCRIPT, Apache 81 ni servidor 8888.

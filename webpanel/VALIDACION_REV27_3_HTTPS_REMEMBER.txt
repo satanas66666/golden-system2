@@ -1,0 +1,35 @@
+GOLDEN ADM PRO WEB PANEL - VALIDACION REV27.3
+
+Cambios solicitados:
+ - HTTPS público para IP sin advertencia de certificado (opcional, Let’s Encrypt).
+ - Checkbox Recordar contraseña / sesión 30 días.
+ - Mantener responsive REV27.2 para PC/tablet/móvil.
+ - No modificar gerar ni el bridge administrativo.
+
+Pruebas realizadas:
+ [OK] go test ./...
+ [OK] golden-web compilado estático: amd64, arm64, 386
+ [OK] bash -n instalador/updater/HTTPS script
+ [OK] Login sin Remember: cookie de sesión sin Max-Age persistente
+ [OK] Login con Remember: Secure + HttpOnly + SameSite=Strict + 30 días
+ [OK] La contraseña NO se guarda en localStorage; solo el nombre de usuario
+ [OK] autocomplete username/current-password conservado para password manager
+ [OK] bridge amd64 SIN CAMBIOS: dd04657f43a2dd602996c94a2eb34459e0c7ea87adf13d55413d23e592afda8c
+ [OK] bridge arm64 SIN CAMBIOS: f4896ff482ab3e687d6bc68f3b4eed43453fdaf41cf2137e9a7f1960dd8ebcff
+ [OK] bridge 386 SIN CAMBIOS: 3d320a089d31cf94cc6d00bb7cb780b640b847f846f648fea3e9320ddbc81359
+ [OK] activar_https_confiable_ip_REV27_3.sh usa Certbot >=5.4 + shortlived + --ip-address
+ [OK] deploy hook copia certificados a /etc/golden-web con permisos root:golden-web
+ [OK] renovación programada cada 6 horas; Certbot decide si corresponde renovar
+
+Limitación real del certificado IP:
+ - Requiere TCP 80 accesible para HTTP-01 en emisión/renovación.
+ - El certificado IP de Let’s Encrypt es short-lived (~6 días), por eso renovación automática es obligatoria.
+ - Si la IP pública cambia, hay que emitir un certificado para la nueva IP.
+
+NO MODIFICADO:
+ /bin/gerar
+ /etc/http-shell
+ /etc/SCRIPT
+ servidor 8888
+ Apache 81
+ motor/bridge de keys

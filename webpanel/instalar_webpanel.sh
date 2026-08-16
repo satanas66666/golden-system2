@@ -17,7 +17,7 @@ INIT=/etc/init.d/golden-web
 [[ -d /etc/http-shell && -d /etc/SCRIPT ]] || { echo "ERROR: no encontré la estructura estable del generador (/etc/http-shell y /etc/SCRIPT)."; exit 1; }
 
 echo "============================================================"
-echo " GOLDEN ADM PRO - WEB CONTROL CENTER V1 (REV27.2)"
+echo " GOLDEN ADM PRO - WEB CONTROL CENTER V1 (REV27.3)"
 echo " Complemento web: NO reemplaza ni modifica /bin/gerar"
 echo "============================================================"
 
@@ -99,7 +99,8 @@ cat > "$CFG_DIR/config.json" <<EOF
   "tls_cert": "$CERT",
   "tls_key": "$KEY",
   "bridge_path": "$BRIDGE",
-  "session_minutes": 60
+  "session_minutes": 60,
+  "remember_days": 30
 }
 EOF
 chown root:golden-web "$CFG_DIR/config.json"
@@ -194,8 +195,8 @@ echo " Puerto keys      : 8888 (sin cambios)"
 echo " Apache Golden    : 81   (sin cambios)"
 echo " Puerto 80        : sin tocar"
 echo "============================================================"
-echo "IMPORTANTE: el certificado inicial es autofirmado; el navegador"
-echo "puede mostrar una advertencia la primera vez. Puedes aceptar la"
-echo "excepción o después instalar un certificado válido con dominio."
+echo "IMPORTANTE: el certificado inicial es autofirmado. Para eliminar la"
+echo "advertencia puedes ejecutar activar_https_confiable_ip_REV27_3.sh,"
+echo "que solicita un certificado público para la IP si TCP 80 está libre."
 echo "Si tu proveedor/firewall bloquea $WEB_PORT, abre TCP $WEB_PORT."
 echo "NO es necesario abrir ni cambiar 80/81/8888 para el panel."

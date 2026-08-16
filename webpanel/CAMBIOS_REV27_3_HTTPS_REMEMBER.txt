@@ -1,0 +1,15 @@
+GOLDEN ADM PRO WEB PANEL - REV27.3
+
+Cambios exclusivamente del panel web:
+1. Login agrega "Recordar contraseña".
+   - No guarda la contraseña en texto plano ni en localStorage.
+   - Guarda solo el usuario localmente y extiende la sesión segura hasta 30 días.
+   - Mantiene autocomplete=username/current-password para el gestor de contraseñas del navegador.
+2. Backend acepta Remember=true y usa cookie Secure + HttpOnly + SameSite=Strict.
+3. Nuevo remember_days=30 en config.json (compatible hacia atrás).
+4. Nuevo activar_https_confiable_ip_REV27_3.sh:
+   - Solicita certificado público Let's Encrypt para la IP pública.
+   - Requiere Certbot >=5.4 y TCP 80 accesible.
+   - Los certificados IP son short-lived; configura renovación automática.
+   - Copia cert/key a /etc/golden-web con permisos compatibles con golden-web.
+5. gerar, bridge, keys, /etc/http-shell, /etc/SCRIPT, puertos 81/8888 y motor Golden: SIN CAMBIOS.
