@@ -17,7 +17,7 @@ INIT=/etc/init.d/golden-web
 [[ -d /etc/http-shell && -d /etc/SCRIPT ]] || { echo "ERROR: no encontré la estructura estable del generador (/etc/http-shell y /etc/SCRIPT)."; exit 1; }
 
 echo "============================================================"
-echo " GOLDEN ADM PRO - WEB CONTROL CENTER V1 (REV27)"
+echo " GOLDEN ADM PRO - WEB CONTROL CENTER V1 (REV27.2)"
 echo " Complemento web: NO reemplaza ni modifica /bin/gerar"
 echo "============================================================"
 
@@ -69,6 +69,12 @@ if ! id golden-web >/dev/null 2>&1; then
   useradd --system --gid golden-web --home-dir "$STATE_DIR" --create-home --shell "$NOLOGIN" golden-web
 fi
 mkdir -p "$CFG_DIR" "$STATE_DIR"
+# REV27.2: el servicio corre como golden-web. Con umask 077, mkdir deja
+# /etc/golden-web en 0700 root:root y el servicio no puede leer config/TLS.
+chown root:golden-web "$CFG_DIR"
+chmod 0750 "$CFG_DIR"
+chown golden-web:golden-web "$STATE_DIR"
+chmod 0750 "$STATE_DIR"
 install -m 0755 "$SRC_BIN" "$BIN"
 install -m 0750 -o root -g golden-web "$SRC_BRIDGE" "$BRIDGE"
 
@@ -160,6 +166,10 @@ EOF
 chmod 0755 "$INIT"
 
 "$BIN" --self-test --config "$CFG_DIR/config.json"
+# Validar también con el MISMO usuario que ejecutará el servicio.
+if command -v sudo >/dev/null 2>&1; then
+  sudo -u golden-web "$BIN" --self-test --config "$CFG_DIR/config.json" >/dev/null
+fi
 
 if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
   systemctl daemon-reload

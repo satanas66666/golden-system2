@@ -1,4 +1,8 @@
-GOLDEN ADM PRO - WEB CONTROL CENTER V1 (REV27)
+REV27.2 PERMISSION FIX
+=======================
+Corrige únicamente permisos de /etc/golden-web para que el servicio golden-web pueda leer config/TLS.
+
+GOLDEN ADM PRO - WEB CONTROL CENTER V1 (REV27.2)
 ================================================
 
 OBJETIVO

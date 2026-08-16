@@ -1,0 +1,51 @@
+GOLDEN ADM PRO WEB PANEL V1 - REV27.2 COPY + RESPONSIVE
+Fecha de validación: 2026-08-13
+
+OBJETIVO
+- Corregir el copiado de la key en navegador móvil.
+- Mejorar adaptación automática a PC/tablet/celular.
+- No tocar el motor estable del generador.
+
+PRUEBAS
+[OK] JavaScript: node --check sin errores.
+[OK] Bash: instalar_webpanel.sh sin errores de sintaxis.
+[OK] Bash: instalar_webpanel_remoto.sh sin errores de sintaxis.
+[OK] Bash: actualizar_webpanel_REV27_2.sh sin errores de sintaxis.
+[OK] Go linux/amd64 compilado CGO_ENABLED=0.
+[OK] Go linux/arm64 compilado CGO_ENABLED=0.
+[OK] Go linux/386 compilado CGO_ENABLED=0.
+[OK] Binario amd64 --self-test.
+[OK] Servidor HTTPS local: /api/health respondió status=ok.
+[OK] HTML embebido en el binario contiene 'Copiar key'.
+[OK] HTML embebido contiene fallback copyTextValue().
+[OK] HTML embebido contiene data-label para vista móvil tipo tarjeta.
+[OK] Bridge administrativo NO modificado.
+     SHA bridge REV27.1: dd04657f43a2dd602996c94a2eb34459e0c7ea87adf13d55413d23e592afda8c
+     SHA bridge REV27.2: dd04657f43a2dd602996c94a2eb34459e0c7ea87adf13d55413d23e592afda8c
+
+COPIADO REV27.2
+1) Intenta navigator.clipboard.writeText cuando está disponible.
+2) Si el navegador/certificado bloquea Clipboard API, usa document.execCommand('copy').
+3) Si ambos fallan, selecciona automáticamente la key y explica cómo copiar manualmente.
+4) Botón explícito 'Copiar key'.
+5) Botón 'Copiar URL'.
+6) Botón 'Compartir key' si el navegador soporta Web Share.
+
+RESPONSIVE
+- PC: tabla completa tradicional.
+- <= 980px: navegación móvil.
+- <= 720px: cada key se convierte en tarjeta legible, sin tabla horizontal gigante.
+- <= 420px: dashboard de una columna y modales/botones a ancho completo.
+- >= 1400px: mejor aprovechamiento de escritorio.
+
+NO MODIFICADO
+- /bin/gerar
+- /etc/http-shell
+- /etc/SCRIPT
+- generación de keys
+- servidor TCP 8888
+- Apache TCP 81
+- bridge de operaciones privilegiadas
+- protocolos de las VPS cliente
+
+RESULTADO: APROBADO para prueba real del panel.
