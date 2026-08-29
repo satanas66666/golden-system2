@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -Euo pipefail
 
-VERSION="1.2.0"
+VERSION="1.2.1"
 ENGINE_VERSION="1.2.0"
+ENGINE_SHA_AMD64="d694852767391132bd7b51dc7ddcbd028efc5e8d859a6efed5aa777772130041"
+ENGINE_SHA_ARM64="bb0228b4a89f4caba9be97fb0fcacd196691a5f6de4a8b5569f7e5fccadce4ad"
 SERVICE="superflash-xhttp.service"
 BASE="/etc/superflash-xhttp"
 TLS_DIR="$BASE/tls"
@@ -23,6 +25,28 @@ need_root(){ if [ "${EUID:-$(id -u)}" -ne 0 ]; then echo -e "${red}Ejecuta como 
 pause(){ echo; read -r -p "Presiona ENTER para continuar..." _ || true; }
 valid_port(){ [[ "${1:-}" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
 valid_domain(){ [[ "${1:-}" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]; }
+
+expected_engine_sha(){
+  case "$(uname -m)" in
+    x86_64|amd64) echo "$ENGINE_SHA_AMD64" ;;
+    aarch64|arm64) echo "$ENGINE_SHA_ARM64" ;;
+    *) echo "" ;;
+  esac
+}
+engine_hash(){
+  [ -f "$BIN" ] && sha256sum "$BIN" 2>/dev/null | awk '{print $1}' || true
+}
+engine_state(){
+  local exp got
+  exp="$(expected_engine_sha)"; got="$(engine_hash)"
+  if [ -z "$got" ]; then
+    echo "NO INSTALADO"
+  elif [ -n "$exp" ] && [ "$got" = "$exp" ]; then
+    echo "ACTUAL v$ENGINE_VERSION"
+  else
+    echo "ANTIGUO/OTRO"
+  fi
+}
 
 load_config(){
   XHTTP_PORT="$DEFAULT_XHTTP_PORT"; SSH_PORT="$DEFAULT_SSH_PORT"; DOMAIN=""; ACME_EMAIL=""
@@ -58,15 +82,22 @@ install_deps(){
 
 install_engine(){
   install_deps || return 1
-  local arch data
+  local arch data expected tmp_hash was_active=0
+  systemctl is-active --quiet "$SERVICE" 2>/dev/null && was_active=1 || true
   arch="$(uname -m)"
   case "$arch" in
-    x86_64|amd64) data="$B64_AMD64" ;;
-    aarch64|arm64) data="$B64_ARM64" ;;
+    x86_64|amd64) data="$B64_AMD64"; expected="$ENGINE_SHA_AMD64" ;;
+    aarch64|arm64) data="$B64_ARM64"; expected="$ENGINE_SHA_ARM64" ;;
     *) echo -e "${red}Arquitectura no soportada: $arch${reset}"; return 1 ;;
   esac
   mkdir -p "$BASE" "$TLS_DIR"
   echo "$data" | base64 -d | gzip -d > "$BIN.tmp"
+  tmp_hash="$(sha256sum "$BIN.tmp" | awk '{print $1}')"
+  if [ "$tmp_hash" != "$expected" ]; then
+    rm -f "$BIN.tmp"
+    echo -e "${red}Fallo de integridad del motor XHTTP: SHA-256 no coincide.${reset}"
+    return 1
+  fi
   chmod 0755 "$BIN.tmp"
   mv -f "$BIN.tmp" "$BIN"
 
@@ -105,7 +136,28 @@ EOF
   systemctl daemon-reload
   systemctl enable "$SERVICE" >/dev/null 2>&1 || true
   load_config; save_config
+
+  # FIX v1.2.1: reemplazar el archivo no cambia un proceso Go que ya estaba
+  # ejecutándose. Si XHTTP estaba activo, reiniciarlo aquí para que el proceso
+  # cargue realmente el motor 1.2.0 recién instalado.
+  if [ "$was_active" -eq 1 ]; then
+    if [ -s "$TLS_DIR/fullchain.pem" ] && [ -s "$TLS_DIR/key.pem" ]; then
+      systemctl restart "$SERVICE"
+      sleep .6
+      if ! systemctl is-active --quiet "$SERVICE"; then
+        echo -e "${red}El motor se instaló, pero XHTTP no pudo reiniciar.${reset}"
+        journalctl -u "$SERVICE" -n 30 --no-pager || true
+        return 1
+      fi
+      echo -e "${green}✔ Proceso XHTTP reiniciado con el motor nuevo.${reset}"
+    else
+      echo -e "${yellow}Motor actualizado; no se reinició porque falta certificado TLS.${reset}"
+    fi
+  fi
+
   echo -e "${green}✔ Motor SuperFlash XHTTP Server $ENGINE_VERSION instalado/actualizado.${reset}"
+  echo "  SHA-256: $(engine_hash)"
+  echo "  Estado  : $(engine_state)"
   echo "  BHTTP/puerto 80 NO fue modificado."
 }
 
@@ -207,7 +259,7 @@ set_ssh_port(){
 status_server(){
   load_config
   echo -e "${cyan}SUPERFLASH XHTTP — ESTADO${reset}"
-  echo "Motor       : $([ -x "$BIN" ] && echo "INSTALADO v$ENGINE_VERSION" || echo "NO INSTALADO")"
+  echo "Motor       : $(engine_state)"
   echo "Dominio     : ${DOMAIN:-<sin configurar>}"
   echo "XHTTP       : TCP ${XHTTP_PORT:-443}"
   echo "SSH backend : 127.0.0.1:${SSH_PORT:-22}"
@@ -248,6 +300,10 @@ self_test(){
         --resolve "$DOMAIN:${XHTTP_PORT}:127.0.0.1" \
         "https://$DOMAIN:${XHTTP_PORT}/xhttp/health"; then
       cat "$health_body"
+      if grep -q 'SuperFlash XHTTP 1\.1\.0' "$health_body" 2>/dev/null; then
+        echo -e "${red}✘ El proceso activo todavía es XHTTP 1.1.0 (motor viejo en memoria).${reset}"
+        echo -e "${yellow}  Ejecuta opción 1; este manager v1.2.1 reiniciará automáticamente el servicio.${reset}"
+      fi
       if tr -d '\r' < "$health_headers" | grep -qi '^x-http-upload-stream: 1$'; then
         echo -e "${green}✔ XHTTP STREAM-UP FAST PATH ACTIVO${reset}"
       else
@@ -289,13 +345,13 @@ menu(){
     echo -e "${cyan}╔══════════════════════════════════════════════════════╗${reset}"
     echo -e "${cyan}║  SUPERFLASH XHTTP TLS/HTTP2 SERVER MANAGER v$VERSION     ║${reset}"
     echo -e "${cyan}╚══════════════════════════════════════════════════════╝${reset}"
-    echo "Motor       : $([ -x "$BIN" ] && echo "✔ INSTALADO (Go, sin token)" || echo "✘ NO INSTALADO")"
+    echo "Motor       : $(engine_state) (Go, sin token)"
     echo "Dominio     : ${DOMAIN:-<sin configurar>}"
     echo "XHTTP       : :${XHTTP_PORT:-443} -> SSH 127.0.0.1:${SSH_PORT:-22}"
     echo "Servicio    : $(systemctl is-active "$SERVICE" 2>/dev/null || true)"
     echo "BHTTP :80   : CONGELADO / NO SE TOCA"
     echo
-    echo "1) Instalar/ACTUALIZAR motor XHTTP v$ENGINE_VERSION (SIN TOKEN)"
+    echo "1) Instalar/ACTUALIZAR motor XHTTP v$ENGINE_VERSION + REINICIO seguro"
     echo "2) Configurar dominio + certificado Let's Encrypt (TLS-ALPN-01)"
     echo "3) Abrir/iniciar XHTTP TCP 443"
     echo "4) Configurar puerto externo XHTTP"
