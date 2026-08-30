@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Euo pipefail
 
-MANAGER_VERSION="1.4.1"
+MANAGER_VERSION="1.4.2"
 ENGINE_VERSION="1.4.0"
 PROTOCOL_NAME="SSH_XHTTP - NEW GOLDEN"
 ENGINE_SHA_AMD64="446960ef13353d3f186721bc6b8426116e75a56af12689317e9b3d6f99ce77da"
@@ -16,7 +16,7 @@ UNIT="/etc/systemd/system/$SERVICE"
 ACME="/root/.acme.sh/acme.sh"
 DEFAULT_XHTTP_PORT=443
 DEFAULT_SSH_PORT=22
-SELF="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || printf '%s' "$0")"
+SELF="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || realpath "${BASH_SOURCE[0]:-$0}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]:-$0}")"
 
 red='\033[1;31m'; green='\033[1;32m'; cyan='\033[1;36m'; yellow='\033[1;33m'; reset='\033[0m'
 
@@ -99,355 +99,11 @@ ensure_tls_deps(){
   fi
 }
 
-extract_engine_from_self(){
-  local dest="$1" tmp arch src expected got
-  ensure_core_deps || return 1
-  arch="$(uname -m)"
-  case "$arch" in
-    x86_64|amd64) src="engine-amd64"; expected="$ENGINE_SHA_AMD64" ;;
-    aarch64|arm64) src="engine-arm64"; expected="$ENGINE_SHA_ARM64" ;;
-    *) echo -e "${red}Arquitectura no soportada: $arch (solo amd64/arm64).${reset}"; return 1 ;;
-  esac
-  [ -f "$SELF" ] || { echo -e "${red}No pude leer el propio instalador: $SELF${reset}"; return 1; }
-  tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
-  awk '/^__NEW_GOLDEN_PAYLOAD_BEGIN__$/{f=1;next}/^__NEW_GOLDEN_PAYLOAD_END__$/{f=0}f' "$SELF" \
-    | base64 -d | tar -xzf - -C "$tmp"
-  [ -s "$tmp/$src" ] || { echo -e "${red}Payload interno incompleto.${reset}"; return 1; }
-  got="$(sha256sum "$tmp/$src" | awk '{print $1}')"
-  [ "$got" = "$expected" ] || { echo -e "${red}Integridad FAIL: SHA-256 del motor no coincide.${reset}"; return 1; }
-  install -m 0755 "$tmp/$src" "$dest"
-  trap - RETURN
-  rm -rf "$tmp"
-}
-
-write_runtime_files(){
-  mkdir -p "$BASE" "$TLS_DIR"
-  load_config; save_config
-  cat > "$RUNNER" <<'EOF'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-. /etc/superflash-xhttp/config
-exec /usr/local/bin/superflash-xhttp-server \
-  -listen "0.0.0.0:${XHTTP_PORT}" \
-  -backend "127.0.0.1:${SSH_PORT}" \
-  -cert /etc/superflash-xhttp/tls/fullchain.pem \
-  -key /etc/superflash-xhttp/tls/key.pem
-EOF
-  chmod 0755 "$RUNNER"
-  cat > "$UNIT" <<EOF
-[Unit]
-Description=$PROTOCOL_NAME — SuperFlash XHTTP TLS/HTTP2 SSH transport v${ENGINE_VERSION}
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=$RUNNER
-Restart=on-failure
-RestartSec=1
-TimeoutStopSec=5
-LimitNOFILE=65536
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectHome=true
-ProtectSystem=full
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  systemctl daemon-reload
-  systemctl enable "$SERVICE" >/dev/null 2>&1 || true
-}
-
-install_engine(){
-  ensure_core_deps || return 1
-  local expected got was_active=0 changed=0
-  expected="$(expected_engine_sha)"
-  [ -n "$expected" ] || { echo -e "${red}Arquitectura no soportada: $(uname -m)${reset}"; return 1; }
-  systemctl is-active --quiet "$SERVICE" 2>/dev/null && was_active=1 || true
-  got="$(engine_hash)"
-  if [ "$got" != "$expected" ]; then
-    echo "Instalando motor estable XHTTP $ENGINE_VERSION..."
-    extract_engine_from_self "$BIN.tmp" || { rm -f "$BIN.tmp"; return 1; }
-    chmod 0755 "$BIN.tmp"
-    mv -f "$BIN.tmp" "$BIN"
-    changed=1
-  fi
-  write_runtime_files
-  if [ "$was_active" -eq 1 ] && [ "$changed" -eq 1 ] && [ -s "$TLS_DIR/fullchain.pem" ] && [ -s "$TLS_DIR/key.pem" ]; then
-    systemctl restart "$SERVICE"
-  fi
-  echo -e "${green}✔ Motor $PROTOCOL_NAME listo.${reset}"
-  echo "  Engine : $ENGINE_VERSION (sin cambios funcionales respecto al estable 1.4.0)"
-  echo "  SHA-256: $(engine_hash)"
-}
-
-known_competitors=("superflash-h2connect.service" "superflash-xhttp-native.service")
-stop_known_competitors(){
-  local s
-  for s in "${known_competitors[@]}"; do
-    if systemctl is-active --quiet "$s" 2>/dev/null || systemctl is-enabled --quiet "$s" 2>/dev/null; then
-      systemctl disable --now "$s" >/dev/null 2>&1 || true
-      echo -e "${yellow}Se detuvo/deshabilitó $s porque compite por el puerto 443. Sus archivos NO fueron borrados.${reset}"
-    fi
-  done
-}
-port_owner(){ ss -ltnp "sport = :$1" 2>/dev/null || true; }
-port_in_use(){ ss -ltn "sport = :$1" 2>/dev/null | grep -q LISTEN; }
-
-ensure_port_free_for_service(){
-  local p="$1"
-  systemctl stop "$SERVICE" >/dev/null 2>&1 || true
-  stop_known_competitors
-  sleep .1
-  if port_in_use "$p"; then
-    echo -e "${red}El puerto $p está ocupado por otro servicio:${reset}"
-    port_owner "$p"
-    echo "No se detuvo ese servicio automáticamente para no afectar software ajeno."
-    return 1
-  fi
-}
-
-install_acme(){
-  [ -x "$ACME" ] && return 0
-  ensure_tls_deps || return 1
-  echo "Instalando acme.sh (solo porque todavía no existe en esta VPS)..."
-  if [ -n "${ACME_EMAIL:-}" ]; then curl -fsSL https://get.acme.sh | sh -s email="$ACME_EMAIL"
-  else curl -fsSL https://get.acme.sh | sh
-  fi
-  [ -x "$ACME" ] || { echo -e "${red}No se pudo instalar acme.sh.${reset}"; return 1; }
-}
-
-cert_matches_domain(){
-  local d="$1"
-  [ -s "$TLS_DIR/fullchain.pem" ] && [ -s "$TLS_DIR/key.pem" ] || return 1
-  openssl x509 -in "$TLS_DIR/fullchain.pem" -noout -checkend 604800 >/dev/null 2>&1 || return 1
-  openssl x509 -in "$TLS_DIR/fullchain.pem" -noout -text 2>/dev/null | grep -Fqi "DNS:$d" || \
-    openssl x509 -in "$TLS_DIR/fullchain.pem" -noout -subject 2>/dev/null | grep -Fqi "CN = $d"
-}
-
-configure_domain_cert(){
-  install_engine || return 1
-  ensure_tls_deps || return 1
-  load_config
-  echo "Dominio actual: ${DOMAIN:-<sin configurar>}"
-  read -r -p "Dominio SSH_XHTTP que apunta a esta VPS: " d
-  d="${d,,}"
-  valid_domain "$d" || { echo -e "${red}Dominio inválido.${reset}"; return 1; }
-  read -r -p "Email Let's Encrypt (opcional) [${ACME_EMAIL:-}]: " e
-  [ -n "$e" ] && ACME_EMAIL="$e"
-  DOMAIN="$d"; save_config
-
-  if cert_matches_domain "$DOMAIN"; then
-    echo -e "${green}✔ Certificado existente válido; se reutiliza sin volver a emitir.${reset}"
-    return 0
-  fi
-
-  echo "DNS IPv4 observado para $DOMAIN:"
-  getent ahostsv4 "$DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u | sed -n '1,8p' || true
-  echo -e "${yellow}Para emitir por TLS-ALPN-01, el dominio debe llegar DIRECTAMENTE a esta VPS y el TCP 443 debe estar libre.${reset}"
-  ensure_port_free_for_service 443 || return 1
-  install_acme || return 1
-  mkdir -p "$TLS_DIR"
-  "$ACME" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
-  "$ACME" --issue --alpn -d "$DOMAIN" --server letsencrypt --keylength ec-256 \
-    || { echo -e "${red}No se pudo emitir el certificado. Revisa DNS y TCP 443.${reset}"; return 1; }
-  "$ACME" --install-cert -d "$DOMAIN" --ecc \
-    --key-file "$TLS_DIR/key.pem" \
-    --fullchain-file "$TLS_DIR/fullchain.pem" \
-    --reloadcmd "systemctl restart $SERVICE >/dev/null 2>&1 || true"
-  chmod 600 "$TLS_DIR/key.pem"; chmod 644 "$TLS_DIR/fullchain.pem"
-  echo -e "${green}✔ Certificado Let's Encrypt instalado para $DOMAIN.${reset}"
-}
-
-open_firewall(){
-  local p="$1"
-  load_config
-  if have ufw && ufw status 2>/dev/null | head -1 | grep -qi active; then
-    if ! ufw status 2>/dev/null | grep -Eq "^${p}/tcp[[:space:]]+ALLOW"; then
-      ufw allow "${p}/tcp" >/dev/null 2>&1 || true
-      UFW_RULE_ADDED=1; UFW_RULE_PORT="$p"; save_config
-      echo "UFW: TCP $p permitido por este manager."
-    fi
-  fi
-}
-
-start_server(){
-  load_config
-  [ -x "$BIN" ] || install_engine || return 1
-  [ -n "$DOMAIN" ] || { echo -e "${red}Primero configura dominio/certificado.${reset}"; return 1; }
-  [ -s "$TLS_DIR/fullchain.pem" ] && [ -s "$TLS_DIR/key.pem" ] || { echo -e "${red}Falta certificado TLS.${reset}"; return 1; }
-  ensure_port_free_for_service "$XHTTP_PORT" || return 1
-  open_firewall "$XHTTP_PORT"
-  systemctl start "$SERVICE"
-  for _ in 1 2 3 4 5 6 7 8 9 10; do systemctl is-active --quiet "$SERVICE" && break; sleep .1; done
-  if systemctl is-active --quiet "$SERVICE"; then
-    echo -e "${green}✔ $PROTOCOL_NAME ACTIVO :$XHTTP_PORT -> SSH 127.0.0.1:$SSH_PORT${reset}"
-  else
-    echo -e "${red}$PROTOCOL_NAME no inició. Últimos logs:${reset}"
-    journalctl -u "$SERVICE" -n 30 --no-pager || true
-    return 1
-  fi
-}
-
-quick_install(){
-  echo -e "${cyan}$PROTOCOL_NAME — instalación rápida${reset}"
-  install_engine || return 1
-  load_config
-  if [ -z "$DOMAIN" ] || ! cert_matches_domain "$DOMAIN"; then
-    configure_domain_cert || return 1
-  else
-    echo -e "${green}✔ TLS existente válido para $DOMAIN; no se vuelve a emitir.${reset}"
-  fi
-  start_server || return 1
-  echo -e "${green}✔ Instalación terminada. No se tocó BHTTP :80 ni SSH.${reset}"
-}
-
-set_xhttp_port(){
-  load_config; read -r -p "Puerto externo SSH_XHTTP [$XHTTP_PORT]: " p; p="${p:-$XHTTP_PORT}"
-  valid_port "$p" || { echo "Puerto inválido"; return 1; }
-  XHTTP_PORT="$p"; save_config; start_server
-}
-set_ssh_port(){
-  load_config; read -r -p "Puerto SSH backend local [$SSH_PORT]: " p; p="${p:-$SSH_PORT}"
-  valid_port "$p" || { echo "Puerto inválido"; return 1; }
-  SSH_PORT="$p"; save_config
-  if systemctl is-active --quiet "$SERVICE" 2>/dev/null; then systemctl restart "$SERVICE"; fi
-  echo -e "${green}✔ Backend configurado: 127.0.0.1:$SSH_PORT${reset}"
-}
-
-status_server(){
-  load_config
-  echo -e "${cyan}$PROTOCOL_NAME — ESTADO${reset}"
-  echo "Manager     : v$MANAGER_VERSION"
-  echo "Motor       : $(engine_state)"
-  echo "Dominio     : ${DOMAIN:-<sin configurar>}"
-  echo "XHTTP       : TCP ${XHTTP_PORT:-443}"
-  echo "SSH backend : 127.0.0.1:${SSH_PORT:-22}"
-  echo "Servicio    : $(systemctl is-active "$SERVICE" 2>/dev/null || echo inactive)"
-  echo "BHTTP :80   : NO MODIFICADO"
-  if [ -s "$TLS_DIR/fullchain.pem" ]; then
-    echo "Certificado : $(openssl x509 -in "$TLS_DIR/fullchain.pem" -noout -subject 2>/dev/null | sed 's/^subject=//')"
-    echo "Vence       : $(openssl x509 -in "$TLS_DIR/fullchain.pem" -noout -enddate 2>/dev/null | cut -d= -f2-)"
-  else echo "Certificado : AUSENTE"; fi
-  echo; echo "Listener SSH_XHTTP:"; port_owner "${XHTTP_PORT:-443}"
-}
-
-self_test(){
-  load_config
-  systemctl is-active --quiet "$SERVICE" || { echo "$PROTOCOL_NAME no está activo"; return 1; }
-  [ -n "$DOMAIN" ] || { echo "Dominio no configurado"; return 1; }
-  ensure_tls_deps || return 1
-  echo "1) TLS / SNI / ALPN:"
-  local alpn
-  alpn="$(echo | openssl s_client -connect "127.0.0.1:${XHTTP_PORT}" -servername "$DOMAIN" -alpn h2 2>/dev/null | tr -d '\000' | grep -a -E '^ALPN protocol:' | tail -1 || true)"
-  echo "${alpn:-ALPN no visible}"
-  echo "$alpn" | grep -q 'h2' && echo -e "${green}✔ TLS + ALPN h2 PASS${reset}" || { echo -e "${red}✘ No se confirmó h2${reset}"; return 1; }
-  if curl -V 2>/dev/null | grep -q HTTP2; then
-    echo; echo "2) Health XHTTP estable 1.4.0:"
-    local hh hb; hh="$(mktemp)"; hb="$(mktemp)"
-    if curl --http2 -fsS -D "$hh" -o "$hb" --resolve "$DOMAIN:${XHTTP_PORT}:127.0.0.1" "https://$DOMAIN:${XHTTP_PORT}/xhttp/health"; then
-      cat "$hb"
-      tr -d '\r' < "$hh" | grep -qi '^x-http-packet-up: 1$' && echo -e "${green}✔ PACKET-UP ACTIVO${reset}"
-      tr -d '\r' < "$hh" | grep -qi '^x-http-fast-ack: 1$' && echo -e "${green}✔ FAST-ACK ACTIVO${reset}"
-      tr -d '\r' < "$hh" | grep -qi '^x-http-upload-lanes: 2$' && echo -e "${green}✔ DUAL-UP 2 LANES ACTIVO${reset}"
-      tr -d '\r' < "$hh" | grep -qi '^x-http-upload-stream: 1$' && echo -e "${green}✔ STREAM-UP COMPATIBLE${reset}"
-    fi
-    rm -f "$hh" "$hb"
-  else echo "curl local no incluye HTTP/2; ALPN h2 ya quedó confirmado."; fi
-}
-
-renew_cert(){
-  load_config; [ -n "$DOMAIN" ] || { echo "Dominio no configurado"; return 1; }
-  ensure_tls_deps || return 1; install_acme || return 1
-  ensure_port_free_for_service 443 || return 1
-  "$ACME" --renew -d "$DOMAIN" --ecc --force || return 1
-  "$ACME" --install-cert -d "$DOMAIN" --ecc --key-file "$TLS_DIR/key.pem" --fullchain-file "$TLS_DIR/fullchain.pem" \
-    --reloadcmd "systemctl restart $SERVICE >/dev/null 2>&1 || true"
-  start_server
-}
-
-remove_ufw_rule_if_owned(){
-  load_config
-  if [ "${UFW_RULE_ADDED:-0}" = "1" ] && [ -n "${UFW_RULE_PORT:-}" ] && have ufw; then
-    ufw delete allow "${UFW_RULE_PORT}/tcp" >/dev/null 2>&1 || true
-    echo "UFW: se retiró la regla TCP $UFW_RULE_PORT creada por este manager."
-  fi
-}
-uninstall_server(){
-  load_config
-  local old_domain="$DOMAIN"
-  echo -e "${yellow}Esto elimina SOLO $PROTOCOL_NAME. BHTTP, SSH y otros protocolos NO se tocan.${reset}"
-  read -r -p "Escribe NEW GOLDEN para confirmar: " c
-  [ "$c" = "NEW GOLDEN" ] || { echo "Cancelado."; return 0; }
-  systemctl disable --now "$SERVICE" >/dev/null 2>&1 || true
-  remove_ufw_rule_if_owned
-  rm -f "$UNIT" "$RUNNER" "$BIN" "$BIN.tmp"
-  rm -rf "$BASE"
-  systemctl daemon-reload; systemctl reset-failed "$SERVICE" >/dev/null 2>&1 || true
-  if [ -n "$old_domain" ] && [ -x "$ACME" ]; then
-    read -r -p "¿Quitar también la renovación ACME de $old_domain? [s/N]: " a
-    case "${a,,}" in s|si|sí|y|yes) "$ACME" --remove -d "$old_domain" --ecc >/dev/null 2>&1 || true; echo "Renovación ACME retirada.";; esac
-  fi
-  echo -e "${green}✔ $PROTOCOL_NAME desinstalado correctamente.${reset}"
-  echo "✔ BHTTP :80 y SSH permanecen intactos."
-}
-
-menu(){
-  while true; do
-    clear || true; load_config
-    echo -e "${cyan}╔══════════════════════════════════════════════════════╗${reset}"
-    printf "${cyan}║ %-52s ║${reset}\n" "$PROTOCOL_NAME"
-    echo -e "${cyan}╚══════════════════════════════════════════════════════╝${reset}"
-    echo "Manager     : v$MANAGER_VERSION · Engine estable v$ENGINE_VERSION"
-    echo "Motor       : $(engine_state)"
-    echo "Dominio     : ${DOMAIN:-<sin configurar>}"
-    echo "SSH_XHTTP   : :${XHTTP_PORT:-443} -> SSH 127.0.0.1:${SSH_PORT:-22}"
-    echo "Servicio    : $(systemctl is-active "$SERVICE" 2>/dev/null || true)"
-    echo "BHTTP :80   : NO SE TOCA"
-    echo
-    echo "1) INSTALACIÓN RÁPIDA / ACTUALIZAR (recomendado)"
-    echo "2) Instalar/actualizar SOLO motor estable"
-    echo "3) Configurar dominio + certificado Let's Encrypt"
-    echo "4) Iniciar SSH_XHTTP"
-    echo "5) Configurar puerto externo (443 por defecto)"
-    echo "6) Configurar puerto SSH backend (22 por defecto)"
-    echo "7) Estado/diagnóstico"
-    echo "8) Autoprueba TLS + HTTP/2"
-    echo "9) Ver logs"
-    echo "10) Renovar certificado ahora"
-    echo "11) Reiniciar SSH_XHTTP"
-    echo "12) Detener SSH_XHTTP"
-    echo "13) DESINSTALAR COMPLETO SSH_XHTTP"
-    echo "0) Salir"
-    echo
-    read -r -p "Opción: " op
-    case "$op" in
-      1) quick_install; pause;;
-      2) install_engine; pause;;
-      3) configure_domain_cert; pause;;
-      4) start_server; pause;;
-      5) set_xhttp_port; pause;;
-      6) set_ssh_port; pause;;
-      7) status_server; pause;;
-      8) self_test; pause;;
-      9) journalctl -u "$SERVICE" -n 100 --no-pager || true; pause;;
-      10) renew_cert; pause;;
-      11) systemctl restart "$SERVICE"; sleep .2; status_server; pause;;
-      12) systemctl stop "$SERVICE"; echo "$PROTOCOL_NAME detenido. BHTTP intacto."; pause;;
-      13) uninstall_server; pause;;
-      0) exit 0;;
-      *) echo "Opción inválida"; sleep .5;;
-    esac
-  done
-}
-
-need_root
-menu
-exit 0
-
-: <<'__NEW_GOLDEN_PAYLOAD_EOF__'
-__NEW_GOLDEN_PAYLOAD_BEGIN__
+emit_embedded_engine_payload(){
+  # Payload comprimido embebido en una función: no depende de releer $0.
+  # Esto permite ejecutar el manager desde un archivo normal o desde
+  # process substitution (por ejemplo: bash <(curl ...)).
+  cat <<'__NEW_GOLDEN_ENGINE_PAYLOAD__'
 H4sIAE9llGoC/+y9CXhURdYwfDvpDg0k3gYCNLIl2mpQwYTNtJihAwGroYNhEYLgGBQjrsTQDWFR
 A51Artd22nWcwddxHMfdd3ALm2I6QcLiEkBZXQAXbtsuARwIBOjvnFN1e8nmzPe93///z/NPnie3
 696qc6rqVNWpc06dqrrt3tvvuPe2wXPumTtyuPR/6S8T/q4eMYJ+4S/2d+jwYfAYFvnGv2dlZkLy
@@ -77280,5 +76936,353 @@ g8FgMBgMBoPBYDAYDAaDwWAwGAwGg8FgMBgMBoPBYDAYDAaDwWAwGAwGg8FgMBgMBoPBYDAYDAaD
 wWAwGAwGg8FgMBiM7x/6l42bXhbqP6mktGzy2DFlY0L9xe/VU6aQr/tvfEn/a6bOnFk4qWyyYFdP
 nVA8dsKka0oSocrG/Y/X2FD/ccXXiEgmlwi3bEbpuOIJk64L9Z9QNuZq8W98yZQZE+tZ4l9pYfEk
 9++UoillkxP/GAwGg8FgMBgMBoPBYDAYDAaDwWAwGAwGg8FgMBgMBoPBYDAYqfEvpT6++gCwnwA=
-__NEW_GOLDEN_PAYLOAD_END__
-__NEW_GOLDEN_PAYLOAD_EOF__
+__NEW_GOLDEN_ENGINE_PAYLOAD__
+}
+
+extract_engine_from_self(){
+  local dest="$1" tmp arch src expected got
+  ensure_core_deps || return 1
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) src="engine-amd64"; expected="$ENGINE_SHA_AMD64" ;;
+    aarch64|arm64) src="engine-arm64"; expected="$ENGINE_SHA_ARM64" ;;
+    *) echo -e "${red}Arquitectura no soportada: $arch (solo amd64/arm64).${reset}"; return 1 ;;
+  esac
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  if ! emit_embedded_engine_payload | base64 -d | tar -xzf - -C "$tmp"; then
+    echo -e "${red}No se pudo extraer el motor embebido.${reset}"
+    return 1
+  fi
+  [ -s "$tmp/$src" ] || { echo -e "${red}Payload interno incompleto.${reset}"; return 1; }
+  got="$(sha256sum "$tmp/$src" | awk '{print $1}')"
+  [ "$got" = "$expected" ] || { echo -e "${red}Integridad FAIL: SHA-256 del motor no coincide.${reset}"; return 1; }
+  install -m 0755 "$tmp/$src" "$dest"
+  trap - RETURN
+  rm -rf "$tmp"
+}
+
+write_runtime_files(){
+  mkdir -p "$BASE" "$TLS_DIR"
+  load_config; save_config
+  cat > "$RUNNER" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+. /etc/superflash-xhttp/config
+exec /usr/local/bin/superflash-xhttp-server \
+  -listen "0.0.0.0:${XHTTP_PORT}" \
+  -backend "127.0.0.1:${SSH_PORT}" \
+  -cert /etc/superflash-xhttp/tls/fullchain.pem \
+  -key /etc/superflash-xhttp/tls/key.pem
+EOF
+  chmod 0755 "$RUNNER"
+  cat > "$UNIT" <<EOF
+[Unit]
+Description=$PROTOCOL_NAME — SuperFlash XHTTP TLS/HTTP2 SSH transport v${ENGINE_VERSION}
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$RUNNER
+Restart=on-failure
+RestartSec=1
+TimeoutStopSec=5
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable "$SERVICE" >/dev/null 2>&1 || true
+}
+
+install_engine(){
+  ensure_core_deps || return 1
+  local expected got was_active=0 changed=0
+  expected="$(expected_engine_sha)"
+  [ -n "$expected" ] || { echo -e "${red}Arquitectura no soportada: $(uname -m)${reset}"; return 1; }
+  systemctl is-active --quiet "$SERVICE" 2>/dev/null && was_active=1 || true
+  got="$(engine_hash)"
+  if [ "$got" != "$expected" ]; then
+    echo "Instalando motor estable XHTTP $ENGINE_VERSION..."
+    extract_engine_from_self "$BIN.tmp" || { rm -f "$BIN.tmp"; return 1; }
+    chmod 0755 "$BIN.tmp"
+    mv -f "$BIN.tmp" "$BIN"
+    changed=1
+  fi
+  write_runtime_files
+  if [ "$was_active" -eq 1 ] && [ "$changed" -eq 1 ] && [ -s "$TLS_DIR/fullchain.pem" ] && [ -s "$TLS_DIR/key.pem" ]; then
+    systemctl restart "$SERVICE"
+  fi
+  echo -e "${green}✔ Motor $PROTOCOL_NAME listo.${reset}"
+  echo "  Engine : $ENGINE_VERSION (sin cambios funcionales respecto al estable 1.4.0)"
+  echo "  SHA-256: $(engine_hash)"
+}
+
+known_competitors=("superflash-h2connect.service" "superflash-xhttp-native.service")
+stop_known_competitors(){
+  local s
+  for s in "${known_competitors[@]}"; do
+    if systemctl is-active --quiet "$s" 2>/dev/null || systemctl is-enabled --quiet "$s" 2>/dev/null; then
+      systemctl disable --now "$s" >/dev/null 2>&1 || true
+      echo -e "${yellow}Se detuvo/deshabilitó $s porque compite por el puerto 443. Sus archivos NO fueron borrados.${reset}"
+    fi
+  done
+}
+port_owner(){ ss -ltnp "sport = :$1" 2>/dev/null || true; }
+port_in_use(){ ss -ltn "sport = :$1" 2>/dev/null | grep -q LISTEN; }
+
+ensure_port_free_for_service(){
+  local p="$1"
+  systemctl stop "$SERVICE" >/dev/null 2>&1 || true
+  stop_known_competitors
+  sleep .1
+  if port_in_use "$p"; then
+    echo -e "${red}El puerto $p está ocupado por otro servicio:${reset}"
+    port_owner "$p"
+    echo "No se detuvo ese servicio automáticamente para no afectar software ajeno."
+    return 1
+  fi
+}
+
+install_acme(){
+  [ -x "$ACME" ] && return 0
+  ensure_tls_deps || return 1
+  echo "Instalando acme.sh (solo porque todavía no existe en esta VPS)..."
+  if [ -n "${ACME_EMAIL:-}" ]; then curl -fsSL https://get.acme.sh | sh -s email="$ACME_EMAIL"
+  else curl -fsSL https://get.acme.sh | sh
+  fi
+  [ -x "$ACME" ] || { echo -e "${red}No se pudo instalar acme.sh.${reset}"; return 1; }
+}
+
+cert_matches_domain(){
+  local d="$1"
+  [ -s "$TLS_DIR/fullchain.pem" ] && [ -s "$TLS_DIR/key.pem" ] || return 1
+  openssl x509 -in "$TLS_DIR/fullchain.pem" -noout -checkend 604800 >/dev/null 2>&1 || return 1
+  openssl x509 -in "$TLS_DIR/fullchain.pem" -noout -text 2>/dev/null | grep -Fqi "DNS:$d" || \
+    openssl x509 -in "$TLS_DIR/fullchain.pem" -noout -subject 2>/dev/null | grep -Fqi "CN = $d"
+}
+
+configure_domain_cert(){
+  install_engine || return 1
+  ensure_tls_deps || return 1
+  load_config
+  echo "Dominio actual: ${DOMAIN:-<sin configurar>}"
+  read -r -p "Dominio SSH_XHTTP que apunta a esta VPS: " d
+  d="${d,,}"
+  valid_domain "$d" || { echo -e "${red}Dominio inválido.${reset}"; return 1; }
+  read -r -p "Email Let's Encrypt (opcional) [${ACME_EMAIL:-}]: " e
+  [ -n "$e" ] && ACME_EMAIL="$e"
+  DOMAIN="$d"; save_config
+
+  if cert_matches_domain "$DOMAIN"; then
+    echo -e "${green}✔ Certificado existente válido; se reutiliza sin volver a emitir.${reset}"
+    return 0
+  fi
+
+  echo "DNS IPv4 observado para $DOMAIN:"
+  getent ahostsv4 "$DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u | sed -n '1,8p' || true
+  echo -e "${yellow}Para emitir por TLS-ALPN-01, el dominio debe llegar DIRECTAMENTE a esta VPS y el TCP 443 debe estar libre.${reset}"
+  ensure_port_free_for_service 443 || return 1
+  install_acme || return 1
+  mkdir -p "$TLS_DIR"
+  "$ACME" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
+  "$ACME" --issue --alpn -d "$DOMAIN" --server letsencrypt --keylength ec-256 \
+    || { echo -e "${red}No se pudo emitir el certificado. Revisa DNS y TCP 443.${reset}"; return 1; }
+  "$ACME" --install-cert -d "$DOMAIN" --ecc \
+    --key-file "$TLS_DIR/key.pem" \
+    --fullchain-file "$TLS_DIR/fullchain.pem" \
+    --reloadcmd "systemctl restart $SERVICE >/dev/null 2>&1 || true"
+  chmod 600 "$TLS_DIR/key.pem"; chmod 644 "$TLS_DIR/fullchain.pem"
+  echo -e "${green}✔ Certificado Let's Encrypt instalado para $DOMAIN.${reset}"
+}
+
+open_firewall(){
+  local p="$1"
+  load_config
+  if have ufw && ufw status 2>/dev/null | head -1 | grep -qi active; then
+    if ! ufw status 2>/dev/null | grep -Eq "^${p}/tcp[[:space:]]+ALLOW"; then
+      ufw allow "${p}/tcp" >/dev/null 2>&1 || true
+      UFW_RULE_ADDED=1; UFW_RULE_PORT="$p"; save_config
+      echo "UFW: TCP $p permitido por este manager."
+    fi
+  fi
+}
+
+start_server(){
+  load_config
+  [ -x "$BIN" ] || install_engine || return 1
+  [ -n "$DOMAIN" ] || { echo -e "${red}Primero configura dominio/certificado.${reset}"; return 1; }
+  [ -s "$TLS_DIR/fullchain.pem" ] && [ -s "$TLS_DIR/key.pem" ] || { echo -e "${red}Falta certificado TLS.${reset}"; return 1; }
+  ensure_port_free_for_service "$XHTTP_PORT" || return 1
+  open_firewall "$XHTTP_PORT"
+  systemctl start "$SERVICE"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do systemctl is-active --quiet "$SERVICE" && break; sleep .1; done
+  if systemctl is-active --quiet "$SERVICE"; then
+    echo -e "${green}✔ $PROTOCOL_NAME ACTIVO :$XHTTP_PORT -> SSH 127.0.0.1:$SSH_PORT${reset}"
+  else
+    echo -e "${red}$PROTOCOL_NAME no inició. Últimos logs:${reset}"
+    journalctl -u "$SERVICE" -n 30 --no-pager || true
+    return 1
+  fi
+}
+
+quick_install(){
+  echo -e "${cyan}$PROTOCOL_NAME — instalación rápida${reset}"
+  install_engine || return 1
+  load_config
+  if [ -z "$DOMAIN" ] || ! cert_matches_domain "$DOMAIN"; then
+    configure_domain_cert || return 1
+  else
+    echo -e "${green}✔ TLS existente válido para $DOMAIN; no se vuelve a emitir.${reset}"
+  fi
+  start_server || return 1
+  echo -e "${green}✔ Instalación terminada. No se tocó BHTTP :80 ni SSH.${reset}"
+}
+
+set_xhttp_port(){
+  load_config; read -r -p "Puerto externo SSH_XHTTP [$XHTTP_PORT]: " p; p="${p:-$XHTTP_PORT}"
+  valid_port "$p" || { echo "Puerto inválido"; return 1; }
+  XHTTP_PORT="$p"; save_config; start_server
+}
+set_ssh_port(){
+  load_config; read -r -p "Puerto SSH backend local [$SSH_PORT]: " p; p="${p:-$SSH_PORT}"
+  valid_port "$p" || { echo "Puerto inválido"; return 1; }
+  SSH_PORT="$p"; save_config
+  if systemctl is-active --quiet "$SERVICE" 2>/dev/null; then systemctl restart "$SERVICE"; fi
+  echo -e "${green}✔ Backend configurado: 127.0.0.1:$SSH_PORT${reset}"
+}
+
+status_server(){
+  load_config
+  echo -e "${cyan}$PROTOCOL_NAME — ESTADO${reset}"
+  echo "Manager     : v$MANAGER_VERSION"
+  echo "Motor       : $(engine_state)"
+  echo "Dominio     : ${DOMAIN:-<sin configurar>}"
+  echo "XHTTP       : TCP ${XHTTP_PORT:-443}"
+  echo "SSH backend : 127.0.0.1:${SSH_PORT:-22}"
+  echo "Servicio    : $(systemctl is-active "$SERVICE" 2>/dev/null || echo inactive)"
+  echo "BHTTP :80   : NO MODIFICADO"
+  if [ -s "$TLS_DIR/fullchain.pem" ]; then
+    echo "Certificado : $(openssl x509 -in "$TLS_DIR/fullchain.pem" -noout -subject 2>/dev/null | sed 's/^subject=//')"
+    echo "Vence       : $(openssl x509 -in "$TLS_DIR/fullchain.pem" -noout -enddate 2>/dev/null | cut -d= -f2-)"
+  else echo "Certificado : AUSENTE"; fi
+  echo; echo "Listener SSH_XHTTP:"; port_owner "${XHTTP_PORT:-443}"
+}
+
+self_test(){
+  load_config
+  systemctl is-active --quiet "$SERVICE" || { echo "$PROTOCOL_NAME no está activo"; return 1; }
+  [ -n "$DOMAIN" ] || { echo "Dominio no configurado"; return 1; }
+  ensure_tls_deps || return 1
+  echo "1) TLS / SNI / ALPN:"
+  local alpn
+  alpn="$(echo | openssl s_client -connect "127.0.0.1:${XHTTP_PORT}" -servername "$DOMAIN" -alpn h2 2>/dev/null | tr -d '\000' | grep -a -E '^ALPN protocol:' | tail -1 || true)"
+  echo "${alpn:-ALPN no visible}"
+  echo "$alpn" | grep -q 'h2' && echo -e "${green}✔ TLS + ALPN h2 PASS${reset}" || { echo -e "${red}✘ No se confirmó h2${reset}"; return 1; }
+  if curl -V 2>/dev/null | grep -q HTTP2; then
+    echo; echo "2) Health XHTTP estable 1.4.0:"
+    local hh hb; hh="$(mktemp)"; hb="$(mktemp)"
+    if curl --http2 -fsS -D "$hh" -o "$hb" --resolve "$DOMAIN:${XHTTP_PORT}:127.0.0.1" "https://$DOMAIN:${XHTTP_PORT}/xhttp/health"; then
+      cat "$hb"
+      tr -d '\r' < "$hh" | grep -qi '^x-http-packet-up: 1$' && echo -e "${green}✔ PACKET-UP ACTIVO${reset}"
+      tr -d '\r' < "$hh" | grep -qi '^x-http-fast-ack: 1$' && echo -e "${green}✔ FAST-ACK ACTIVO${reset}"
+      tr -d '\r' < "$hh" | grep -qi '^x-http-upload-lanes: 2$' && echo -e "${green}✔ DUAL-UP 2 LANES ACTIVO${reset}"
+      tr -d '\r' < "$hh" | grep -qi '^x-http-upload-stream: 1$' && echo -e "${green}✔ STREAM-UP COMPATIBLE${reset}"
+    fi
+    rm -f "$hh" "$hb"
+  else echo "curl local no incluye HTTP/2; ALPN h2 ya quedó confirmado."; fi
+}
+
+renew_cert(){
+  load_config; [ -n "$DOMAIN" ] || { echo "Dominio no configurado"; return 1; }
+  ensure_tls_deps || return 1; install_acme || return 1
+  ensure_port_free_for_service 443 || return 1
+  "$ACME" --renew -d "$DOMAIN" --ecc --force || return 1
+  "$ACME" --install-cert -d "$DOMAIN" --ecc --key-file "$TLS_DIR/key.pem" --fullchain-file "$TLS_DIR/fullchain.pem" \
+    --reloadcmd "systemctl restart $SERVICE >/dev/null 2>&1 || true"
+  start_server
+}
+
+remove_ufw_rule_if_owned(){
+  load_config
+  if [ "${UFW_RULE_ADDED:-0}" = "1" ] && [ -n "${UFW_RULE_PORT:-}" ] && have ufw; then
+    ufw delete allow "${UFW_RULE_PORT}/tcp" >/dev/null 2>&1 || true
+    echo "UFW: se retiró la regla TCP $UFW_RULE_PORT creada por este manager."
+  fi
+}
+uninstall_server(){
+  load_config
+  local old_domain="$DOMAIN"
+  echo -e "${yellow}Esto elimina SOLO $PROTOCOL_NAME. BHTTP, SSH y otros protocolos NO se tocan.${reset}"
+  read -r -p "Escribe NEW GOLDEN para confirmar: " c
+  [ "$c" = "NEW GOLDEN" ] || { echo "Cancelado."; return 0; }
+  systemctl disable --now "$SERVICE" >/dev/null 2>&1 || true
+  remove_ufw_rule_if_owned
+  rm -f "$UNIT" "$RUNNER" "$BIN" "$BIN.tmp"
+  rm -rf "$BASE"
+  systemctl daemon-reload; systemctl reset-failed "$SERVICE" >/dev/null 2>&1 || true
+  if [ -n "$old_domain" ] && [ -x "$ACME" ]; then
+    read -r -p "¿Quitar también la renovación ACME de $old_domain? [s/N]: " a
+    case "${a,,}" in s|si|sí|y|yes) "$ACME" --remove -d "$old_domain" --ecc >/dev/null 2>&1 || true; echo "Renovación ACME retirada.";; esac
+  fi
+  echo -e "${green}✔ $PROTOCOL_NAME desinstalado correctamente.${reset}"
+  echo "✔ BHTTP :80 y SSH permanecen intactos."
+}
+
+menu(){
+  while true; do
+    clear || true; load_config
+    echo -e "${cyan}╔══════════════════════════════════════════════════════╗${reset}"
+    printf "${cyan}║ %-52s ║${reset}\n" "$PROTOCOL_NAME"
+    echo -e "${cyan}╚══════════════════════════════════════════════════════╝${reset}"
+    echo "Manager     : v$MANAGER_VERSION · Engine estable v$ENGINE_VERSION"
+    echo "Motor       : $(engine_state)"
+    echo "Dominio     : ${DOMAIN:-<sin configurar>}"
+    echo "SSH_XHTTP   : :${XHTTP_PORT:-443} -> SSH 127.0.0.1:${SSH_PORT:-22}"
+    echo "Servicio    : $(systemctl is-active "$SERVICE" 2>/dev/null || true)"
+    echo "BHTTP :80   : NO SE TOCA"
+    echo
+    echo "1) INSTALACIÓN RÁPIDA / ACTUALIZAR (recomendado)"
+    echo "2) Instalar/actualizar SOLO motor estable"
+    echo "3) Configurar dominio + certificado Let's Encrypt"
+    echo "4) Iniciar SSH_XHTTP"
+    echo "5) Configurar puerto externo (443 por defecto)"
+    echo "6) Configurar puerto SSH backend (22 por defecto)"
+    echo "7) Estado/diagnóstico"
+    echo "8) Autoprueba TLS + HTTP/2"
+    echo "9) Ver logs"
+    echo "10) Renovar certificado ahora"
+    echo "11) Reiniciar SSH_XHTTP"
+    echo "12) Detener SSH_XHTTP"
+    echo "13) DESINSTALAR COMPLETO SSH_XHTTP"
+    echo "0) Salir"
+    echo
+    read -r -p "Opción: " op
+    case "$op" in
+      1) quick_install; pause;;
+      2) install_engine; pause;;
+      3) configure_domain_cert; pause;;
+      4) start_server; pause;;
+      5) set_xhttp_port; pause;;
+      6) set_ssh_port; pause;;
+      7) status_server; pause;;
+      8) self_test; pause;;
+      9) journalctl -u "$SERVICE" -n 100 --no-pager || true; pause;;
+      10) renew_cert; pause;;
+      11) systemctl restart "$SERVICE"; sleep .2; status_server; pause;;
+      12) systemctl stop "$SERVICE"; echo "$PROTOCOL_NAME detenido. BHTTP intacto."; pause;;
+      13) uninstall_server; pause;;
+      0) exit 0;;
+      *) echo "Opción inválida"; sleep .5;;
+    esac
+  done
+}
+
+need_root
+menu
+exit 0
