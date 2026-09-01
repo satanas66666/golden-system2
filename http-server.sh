@@ -294,7 +294,7 @@ handle_request() {
     fi
 
     # REV26: ruta rápida opcional. El bundle solo existe para keys nuevas creadas
-    # por REV26. Si no existe, el cliente vuelve automáticamente al flujo 43/43.
+    # por REV26. Si no existe, el cliente vuelve automáticamente al flujo 45/45.
     if [[ "$arq" == "$BUNDLE_NAME" || "$arq" == "$BUNDLE_META" ]]; then
         file="${key_dir}/${arq}"
         if [[ ! -f "$file" || -L "$file" || ! -f "${key_dir}/.fast" ]]; then

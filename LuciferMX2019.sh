@@ -879,7 +879,7 @@ fi
 
 inst_components () {
     # REV26: el bootstrap ya instaló el núcleo ANTES de pedir la key. Aquí no
-    # repetimos un apt-get grande después de transferir los 43 archivos.
+    # repetimos un apt-get grande después de transferir los 45 archivos.
     # Solo reparamos una ejecución directa/legacy si realmente falta algo.
     local p
     local -a missing=()
@@ -1034,7 +1034,7 @@ fi
 case $1 in
 "menu"|"message.txt")ARQ="${SCPdir}/";;
 "usercodes")ARQ="${SCPusr}/";;
-"openssh.sh"|"squid.sh"|"dropbear.sh"|"openvpn.sh"|"ssl.sh"|"proxygo.sh"|"hysteria.sh"|"badvpn.sh"|"slowdns.sh"|"haproxy.sh"|"shadowsocks.sh"|"v2ray.sh"|"websocket.sh"|"compat.sh"|"PDirect.py"|"PPub.py"|"PPriv.py"|"POpen.py"|"PGet.py") ARQ="${SCPinst}/";;
+"openssh.sh"|"squid.sh"|"dropbear.sh"|"openvpn.sh"|"ssl.sh"|"proxygo.sh"|"hysteria.sh"|"badvpn.sh"|"bhttp.sh"|"xhttp-h2.sh"|"slowdns.sh"|"haproxy.sh"|"shadowsocks.sh"|"v2ray.sh"|"websocket.sh"|"compat.sh"|"PDirect.py"|"PPub.py"|"PPriv.py"|"POpen.py"|"PGet.py") ARQ="${SCPinst}/";;
 *)ARQ="${SCPfrm}/";;
 esac
 
@@ -1045,7 +1045,7 @@ chmod +x ${ARQ}/$1
 
 post_payload_sanity() {
     local f
-    local -a required=(compat.sh badvpn.sh proxygo.sh dropbear.sh openvpn.sh ssl.sh squid.sh haproxy.sh hysteria.sh slowdns.sh v2ray.sh websocket.sh)
+    local -a required=(compat.sh badvpn.sh bhttp.sh xhttp-h2.sh proxygo.sh dropbear.sh openvpn.sh ssl.sh squid.sh haproxy.sh hysteria.sh slowdns.sh v2ray.sh websocket.sh)
     for f in "${required[@]}"; do
         if [[ ! -s "$SCPinst/$f" ]]; then
             echo "[ERROR] Componente requerido ausente o vacío: $SCPinst/$f" >&2
@@ -1248,7 +1248,7 @@ instalar_logo_login
 
 if ! inst_components; then
     msg -verm "Falló la preparación final del núcleo Golden."
-    msg -ama "La KEY y los 43 archivos están correctos; revisa el diagnóstico mostrado arriba."
+    msg -ama "La KEY y los 45 archivos están correctos; revisa el diagnóstico mostrado arriba."
     exit 4
 fi
 

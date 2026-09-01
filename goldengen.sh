@@ -402,7 +402,7 @@ prepare_artifacts() {
 
     # REV26: el instalador no continúa con un catálogo incompleto o mezclado.
     local -a required_payloads=(
-      menu PGet.py ports.sh badvpn.sh ADMbot.sh message.txt usercodes websocket.sh
+      menu PGet.py ports.sh badvpn.sh bhttp.sh xhttp-h2.sh ADMbot.sh message.txt usercodes websocket.sh
       POpen.py PPriv.py PPub.py PDirect.py speedtest.py speed.sh utils.sh
       dropbear.sh apacheon.sh openvpn.sh shadowsocks.sh ssl.sh squid.sh dados.sh
       Crear-Demo.sh squidpass.sh htop.sh gestor.sh proxygo.sh cambiarpass.sh
