@@ -1,0 +1,24 @@
+GOLDEN WEB PANEL REV27.4 — COMPATIBILIDAD BHTTP + XHTTP TLS/H2
+
+El panel web NO necesitó modificación binaria.
+
+Motivo:
+- El panel crea keys usando el mismo motor /bin/gerar.
+- BHTTP y XHTTP TLS/H2 fueron añadidos al inventario BASICINST de Golden REV26.4.
+- Por lo tanto, una KEY de instalación completa creada desde el panel recibe los mismos
+  45 payloads que una KEY completa creada directamente por SSH con gerar.
+- El panel no administra directamente los listeners de BHTTP/XHTTP; esos menús viven
+  en /etc/ger-inst y se ejecutan desde MENU DE INSTALACIONES.
+
+Garantías de esta compatibilidad:
+- Los seis binarios del panel son byte-idénticos a REV27.3.
+- instalar_webpanel.sh permanece byte-idéntico.
+- activar_https_confiable_ip_REV27_3.sh permanece byte-idéntico.
+- actualizar_webpanel_REV27_3.sh permanece byte-idéntico.
+- No se cambia /bin/gerar desde el panel.
+- No se cambian keys existentes, Apache 81 ni servidor 8888.
+
+Uso recomendado:
+1. Actualizar/instalar Golden System PRO REV26.4 BHTTP+XHTTP.
+2. Mantener o instalar este Web Panel.
+3. Crear una KEY completa desde web o desde gerar: ambos usan el mismo motor.
