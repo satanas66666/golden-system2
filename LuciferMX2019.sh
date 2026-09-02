@@ -1034,7 +1034,7 @@ fi
 case $1 in
 "menu"|"message.txt")ARQ="${SCPdir}/";;
 "usercodes")ARQ="${SCPusr}/";;
-"openssh.sh"|"squid.sh"|"dropbear.sh"|"openvpn.sh"|"ssl.sh"|"proxygo.sh"|"hysteria.sh"|"badvpn.sh"|"bhttp.sh"|"xhttp-h2.sh"|"slowdns.sh"|"haproxy.sh"|"shadowsocks.sh"|"v2ray.sh"|"websocket.sh"|"compat.sh"|"PDirect.py"|"PPub.py"|"PPriv.py"|"POpen.py"|"PGet.py") ARQ="${SCPinst}/";;
+"openssh.sh"|"squid.sh"|"dropbear.sh"|"openvpn.sh"|"ssl.sh"|"proxygo.sh"|"shared80-443.sh"|"hysteria.sh"|"badvpn.sh"|"bhttp.sh"|"xhttp-h2.sh"|"slowdns.sh"|"haproxy.sh"|"shadowsocks.sh"|"v2ray.sh"|"websocket.sh"|"compat.sh"|"PDirect.py"|"PPub.py"|"PPriv.py"|"POpen.py"|"PGet.py") ARQ="${SCPinst}/";;
 *)ARQ="${SCPfrm}/";;
 esac
 
@@ -1045,7 +1045,7 @@ chmod +x ${ARQ}/$1
 
 post_payload_sanity() {
     local f
-    local -a required=(compat.sh badvpn.sh bhttp.sh xhttp-h2.sh proxygo.sh dropbear.sh openvpn.sh ssl.sh squid.sh haproxy.sh hysteria.sh slowdns.sh v2ray.sh websocket.sh)
+    local -a required=(compat.sh badvpn.sh bhttp.sh xhttp-h2.sh proxygo.sh shared80-443.sh dropbear.sh openvpn.sh ssl.sh squid.sh haproxy.sh hysteria.sh slowdns.sh v2ray.sh websocket.sh)
     for f in "${required[@]}"; do
         if [[ ! -s "$SCPinst/$f" ]]; then
             echo "[ERROR] Componente requerido ausente o vacío: $SCPinst/$f" >&2

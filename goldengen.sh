@@ -405,7 +405,7 @@ prepare_artifacts() {
       menu PGet.py ports.sh badvpn.sh bhttp.sh xhttp-h2.sh ADMbot.sh message.txt usercodes websocket.sh
       POpen.py PPriv.py PPub.py PDirect.py speedtest.py speed.sh utils.sh
       dropbear.sh apacheon.sh openvpn.sh shadowsocks.sh ssl.sh squid.sh dados.sh
-      Crear-Demo.sh squidpass.sh htop.sh gestor.sh proxygo.sh cambiarpass.sh
+      Crear-Demo.sh squidpass.sh htop.sh gestor.sh proxygo.sh shared80-443.sh cambiarpass.sh
       Proxy-Publico.py Proxy-Privado.py haproxy.sh hysteria.sh hora.sh panelweb.sh
       optimizar.sh v2ray.sh passvulrt.sh nload.sh bbr.sh ban_iptables.sh slowdns.sh
       proxy_manager.sh compat.sh
