@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GOLDEN ADM PRO - bootstrap REV26.2 ROOT REAL + CLOUD APT FAILOVER + GOLD UI EXACT
+# GOLDEN ADM PRO - bootstrap REV26.3 ROOT REAL + CLOUD APT + PANEL GOLD EXACT
 # Ubuntu/Debian antiguos y modernos con APT.
 # Si la VPS inicia como ubuntu/debian/admin/ec2-user/etc:
 #   1) detecta proveedor;
@@ -37,8 +37,45 @@ msg_early() {
     esac
 }
 
+golden_panel_color_code() {
+    # MISMO mapa que msg() del panel Golden original.
+    case "${1:-4}" in
+        1) printf '\033[1;37m' ;;
+        2) printf '\033[31m' ;;
+        3) printf '\033[32m' ;;
+        4) printf '\033[33m' ;;
+        5) printf '\033[34m' ;;
+        6) printf '\033[35m' ;;
+        7) printf '\033[1;36m' ;;
+        *) printf '\033[33m' ;;
+    esac
+}
+
+golden_panel_slot() {
+    local slot="$1" def="$2" value=""
+    if [[ -s /etc/new-adm-color ]]; then
+        # El panel carga 7 números secuencialmente en COLOR[0..6].
+        value="$(awk -v n="$((slot + 1))" '{for(i=1;i<=NF;i++){c++; if(c==n){print $i; exit}}}' /etc/new-adm-color 2>/dev/null || true)"
+    fi
+    [[ "$value" =~ ^[1-7]$ ]] || value="$def"
+    golden_panel_color_code "$value"
+}
+
 gold_bar() {
-    printf '%b\n' "${C_YELLOW}=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=${C_RESET}"
+    local c reset
+    # msg -bar2 usa COLOR[4]. Default exacto del panel: \e[33m.
+    c="$(golden_panel_slot 4 4)"
+    reset=$'\033[0m'
+    printf '%b%s%b\n' "$c" '=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=' "$reset"
+}
+
+gold_title() {
+    local c reset bold
+    # msg -ama usa COLOR[3] + NEGRITO.
+    c="$(golden_panel_slot 3 4)"
+    reset=$'\033[0m'
+    bold=$'\033[1m'
+    printf '%b%b%s%b\n' "$c" "$bold" "$1" "$reset"
 }
 
 detect_provider() {
@@ -97,10 +134,35 @@ prepare_real_root_login() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-C_RESET=$'\033[0m'
-C_GOLD=$'\033[1;33m'
+golden_panel_color_code() {
+    case "${1:-4}" in
+        1) printf '\033[1;37m' ;;
+        2) printf '\033[31m' ;;
+        3) printf '\033[32m' ;;
+        4) printf '\033[33m' ;;
+        5) printf '\033[34m' ;;
+        6) printf '\033[35m' ;;
+        7) printf '\033[1;36m' ;;
+        *) printf '\033[33m' ;;
+    esac
+}
+golden_panel_slot() {
+    local slot="$1" def="$2" value=""
+    if [[ -s /etc/new-adm-color ]]; then
+        value="$(awk -v n="$((slot + 1))" '{for(i=1;i<=NF;i++){c++; if(c==n){print $i; exit}}}' /etc/new-adm-color 2>/dev/null || true)"
+    fi
+    [[ "$value" =~ ^[1-7]$ ]] || value="$def"
+    golden_panel_color_code "$value"
+}
 gold_bar() {
-    printf '%b\n' "${C_GOLD}=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=${C_RESET}"
+    local c
+    c="$(golden_panel_slot 4 4)"
+    printf '%b%s\033[0m\n' "$c" '=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×='
+}
+gold_title() {
+    local c
+    c="$(golden_panel_slot 3 4)"
+    printf '%b\033[1m%s\033[0m\n' "$c" "$1"
 }
 
 provider="${1:-VPS/Cloud}"
@@ -597,7 +659,7 @@ safe_wget() {
 
 clear 2>/dev/null || true
 gold_bar
-printf '%b\n' "${C_YELLOW}        GOLDEN ADM PRO - INSTALADOR REV26.2 UNIVERSAL${C_RESET}"
+printf '%b\n' "${C_YELLOW}        GOLDEN ADM PRO - INSTALADOR REV26.3 UNIVERSAL${C_RESET}"
 gold_bar
 echo "Sistema   : ${PRETTY_NAME:-$OS_ID $OS_VERSION}"
 echo "Proveedor : $(detect_provider)"
