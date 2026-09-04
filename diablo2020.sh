@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# GOLDEN ADM PRO - bootstrap REV26 UNIVERSAL APT
-# Ubuntu/Debian antiguos y modernos con APT. Núcleo ligero + progreso real.
+# GOLDEN ADM PRO - bootstrap REV26 TEST - ROOT LOGIN PREP
+# Ubuntu/Debian antiguos y modernos con APT.
+# Si la VPS inicia como ubuntu/debian/admin/ec2-user/etc:
+#   1) detecta proveedor;
+#   2) usa sudo SOLO para preparar root;
+#   3) pide NUEVA contraseña root;
+#   4) habilita login SSH root + password;
+#   5) valida/reinicia SSH;
+#   6) termina para que el usuario vuelva a entrar REALMENTE como root.
+# Ya conectado como root, al ejecutar este mismo instalador continúa Golden.
 
 set -u
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
 C_RESET='\033[0m'
 C_RED='\033[1;31m'
 C_GREEN='\033[1;32m'
@@ -19,8 +26,248 @@ APT_STEP_TIMEOUT="${GOLDEN_APT_STEP_TIMEOUT:-600}"
 SECOND_STAGE_URL="${GOLDEN_INSTALLER_URL:-https://raw.githubusercontent.com/satanas66666/golden-system2/main/LuciferMX2019.sh}"
 APT_BACKUP_DIR=""
 
-if [[ $(id -u) -ne 0 ]]; then
-    echo -e "${C_RED}Debes ser usuario root para ejecutar el instalador.${C_RESET}" >&2
+msg_early() {
+    case "${1:-}" in
+        info) echo -e "${C_CYAN}[•]${C_RESET} $2" ;;
+        ok)   echo -e "${C_GREEN}[✓]${C_RESET} $2" ;;
+        warn) echo -e "${C_YELLOW}[!]${C_RESET} $2" ;;
+        err)  echo -e "${C_RED}[✗]${C_RESET} $2" ;;
+    esac
+}
+
+detect_provider() {
+    local data="" low=""
+    for f in /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name \
+             /sys/class/dmi/id/board_vendor /sys/class/dmi/id/product_version; do
+        [[ -r "$f" ]] && data+="$(tr '\n' ' ' <"$f" 2>/dev/null) "
+    done
+    low="${data,,}"
+    case "$low" in
+        *amazon*|*ec2*)                         echo "Amazon AWS / EC2" ;;
+        *google*|*compute\ engine*)             echo "Google Cloud Platform" ;;
+        *microsoft*|*azure*)                    echo "Microsoft Azure" ;;
+        *oracle*|*oci*)                         echo "Oracle Cloud" ;;
+        *digitalocean*)                         echo "DigitalOcean" ;;
+        *hetzner*)                              echo "Hetzner Cloud" ;;
+        *vultr*)                                echo "Vultr" ;;
+        *linode*|*akamai*)                      echo "Akamai / Linode" ;;
+        *contabo*)                              echo "Contabo" ;;
+        *openstack*)                            echo "OpenStack Cloud" ;;
+        *vmware*)                               echo "VMware VPS" ;;
+        *xen*)                                  echo "Xen VPS" ;;
+        *kvm*|*qemu*|*bochs*)                  echo "KVM/QEMU VPS" ;;
+        *)                                      echo "VPS/Cloud no identificado" ;;
+    esac
+}
+
+prepare_real_root_login() {
+    [[ "$(id -u)" -ne 0 ]] || return 0
+
+    local provider user helper rc
+    provider="$(detect_provider)"
+    user="$(id -un 2>/dev/null || echo usuario)"
+
+    echo
+    echo "======================================================================"
+    echo "       GOLDEN ADM PRO - CONVERTIR ACCESO A ROOT REAL"
+    echo "======================================================================"
+    echo "Proveedor detectado : $provider"
+    echo "Usuario actual       : $user"
+    echo "UID                  : $(id -u)"
+    echo
+    echo "Golden NO continuará todavía."
+    echo "Primero se preparará el usuario root con SU PROPIA contraseña."
+    echo "Después debes volver a entrar por SSH como root."
+    echo "======================================================================"
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        msg_early err "Este usuario no tiene sudo disponible."
+        msg_early err "Se necesita un usuario administrador para configurar root."
+        exit 1
+    fi
+
+    helper="$(mktemp /tmp/golden-root-prep.XXXXXX.sh)"
+    cat >"$helper" <<'EOF_ROOT_HELPER'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+provider="${1:-VPS/Cloud}"
+orig_user="${2:-usuario}"
+SSHCFG="/etc/ssh/sshd_config"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+BACKUP="/var/backups/golden-root-ssh-$STAMP"
+
+[[ "$(id -u)" -eq 0 ]] || { echo "ERROR: helper sin privilegios root."; exit 1; }
+[[ -f "$SSHCFG" ]] || { echo "ERROR: no existe $SSHCFG"; exit 1; }
+[[ -t 0 ]] || { echo "ERROR: se necesita una terminal interactiva para crear la contraseña root."; exit 1; }
+
+mkdir -p "$BACKUP"
+cp -a "$SSHCFG" "$BACKUP/sshd_config"
+[[ -d /etc/ssh/sshd_config.d ]] && cp -a /etc/ssh/sshd_config.d "$BACKUP/" 2>/dev/null || true
+
+echo
+echo "======================================================================"
+echo "                 CREAR CONTRASEÑA DE ROOT"
+echo "======================================================================"
+echo "Proveedor : $provider"
+echo "Usuario   : $orig_user"
+echo
+echo "Ahora escribe la NUEVA contraseña que vas a usar cuando ingreses como:"
+echo "    usuario: root"
+echo
+echo "La contraseña se solicitará DOS veces y NO se guardará en Golden."
+echo "======================================================================"
+echo
+
+if ! passwd root; then
+    echo "ERROR: no se pudo establecer la contraseña de root."
+    exit 1
+fi
+
+root_state="$(passwd -S root 2>/dev/null | awk '{print $2}' || true)"
+case "$root_state" in
+    P|PS) ;;
+    *)
+        echo "ERROR: la cuenta root no quedó con contraseña utilizable (estado: ${root_state:-desconocido})."
+        exit 1
+        ;;
+esac
+
+# El bloque se coloca AL PRINCIPIO del sshd_config para que sus valores
+# globales sean los primeros encontrados por OpenSSH.
+tmp="$(mktemp)"
+awk '
+BEGIN { skip=0 }
+/^# BEGIN GOLDEN ROOT PASSWORD LOGIN$/ { skip=1; next }
+/^# END GOLDEN ROOT PASSWORD LOGIN$/   { skip=0; next }
+skip==0 { print }
+' "$SSHCFG" >"$tmp"
+
+{
+    echo '# BEGIN GOLDEN ROOT PASSWORD LOGIN'
+    echo 'PermitRootLogin yes'
+    echo 'PasswordAuthentication yes'
+    echo 'AuthenticationMethods any'
+    echo 'PermitEmptyPasswords no'
+    echo '# END GOLDEN ROOT PASSWORD LOGIN'
+    cat "$tmp"
+} >"$SSHCFG"
+rm -f "$tmp"
+chmod 600 "$SSHCFG"
+
+sshd_bin="$(command -v sshd || true)"
+[[ -n "$sshd_bin" ]] || [[ ! -x /usr/sbin/sshd ]] || sshd_bin=/usr/sbin/sshd
+[[ -n "$sshd_bin" ]] || {
+    cp -a "$BACKUP/sshd_config" "$SSHCFG"
+    echo "ERROR: no se encontró sshd."
+    exit 1
+}
+
+if ! "$sshd_bin" -t; then
+    echo "ERROR: sshd rechazó la configuración. Restaurando..."
+    cp -a "$BACKUP/sshd_config" "$SSHCFG"
+    "$sshd_bin" -t >/dev/null 2>&1 || true
+    exit 1
+fi
+
+effective="$("$sshd_bin" -T -C user=root,host="$(hostname)",addr=127.0.0.1 2>/dev/null || "$sshd_bin" -T 2>/dev/null || true)"
+permit="$(printf '%s\n' "$effective" | awk '$1=="permitrootlogin"{print $2; exit}')"
+passauth="$(printf '%s\n' "$effective" | awk '$1=="passwordauthentication"{print $2; exit}')"
+authmethods="$(printf '%s\n' "$effective" | awk '$1=="authenticationmethods"{print $2; exit}')"
+
+if [[ "$permit" != "yes" || "$passauth" != "yes" ]]; then
+    echo "ERROR: SSH efectivo no permite todavía root+password."
+    echo "PermitRootLogin efectivo    : ${permit:-desconocido}"
+    echo "PasswordAuthentication      : ${passauth:-desconocido}"
+    echo "AuthenticationMethods       : ${authmethods:-desconocido}"
+    echo "Restaurando configuración SSH anterior..."
+    cp -a "$BACKUP/sshd_config" "$SSHCFG"
+    exit 1
+fi
+
+restart_ok=0
+for svc in ssh sshd; do
+    if systemctl list-unit-files "$svc.service" >/dev/null 2>&1; then
+        if systemctl restart "$svc.service"; then
+            restart_ok=1
+            break
+        fi
+    fi
+done
+
+if (( restart_ok == 0 )); then
+    if command -v service >/dev/null 2>&1; then
+        service ssh restart >/dev/null 2>&1 && restart_ok=1 || true
+        (( restart_ok == 1 )) || service sshd restart >/dev/null 2>&1 && restart_ok=1 || true
+    fi
+fi
+
+if (( restart_ok == 0 )); then
+    echo "ERROR: no se pudo reiniciar SSH. Restaurando..."
+    cp -a "$BACKUP/sshd_config" "$SSHCFG"
+    systemctl restart ssh.service >/dev/null 2>&1 || systemctl restart sshd.service >/dev/null 2>&1 || true
+    exit 1
+fi
+
+sleep 1
+if ! "$sshd_bin" -t; then
+    echo "ERROR: SSH quedó inválido tras reinicio. Restaurando..."
+    cp -a "$BACKUP/sshd_config" "$SSHCFG"
+    systemctl restart ssh.service >/dev/null 2>&1 || systemctl restart sshd.service >/dev/null 2>&1 || true
+    exit 1
+fi
+
+echo
+echo "======================================================================"
+echo "                       ROOT PREPARADO"
+echo "======================================================================"
+echo "[PASS] Contraseña propia de root configurada."
+echo "[PASS] PermitRootLogin efectivo       : $permit"
+echo "[PASS] PasswordAuthentication efectivo : $passauth"
+echo "[PASS] SSH validado y reiniciado."
+echo "[BACKUP] $BACKUP"
+echo
+echo "NO cierres esta sesión todavía."
+echo "Abre OTRA sesión SSH y prueba:"
+echo
+echo "    Usuario    : root"
+echo "    Contraseña : la que acabas de crear"
+echo
+echo "Cuando logres entrar como root, vuelve a ejecutar el instalador Golden."
+echo "======================================================================"
+EOF_ROOT_HELPER
+    chmod 700 "$helper"
+
+    if sudo -n true >/dev/null 2>&1; then
+        msg_early ok "SUDO administrativo disponible."
+    else
+        msg_early info "SUDO solicitará la contraseña del usuario actual '$user'."
+        if ! sudo -v; then
+            rm -f "$helper"
+            msg_early err "No se pudo obtener privilegio administrativo con sudo."
+            exit 1
+        fi
+    fi
+
+    sudo bash "$helper" "$provider" "$user"
+    rc=$?
+    rm -f "$helper"
+
+    if (( rc == 0 )); then
+        echo
+        msg_early ok "Preparación root terminada."
+        msg_early info "Este instalador se detiene aquí a propósito."
+        msg_early info "Vuelve a entrar por SSH como root y ejecútalo otra vez."
+    fi
+    exit "$rc"
+}
+
+# Si NO eres root, prepara root real y termina.
+# Si YA eres root, continúa la instalación Golden normal.
+prepare_real_root_login
+
+if [[ "$(id -u)" -ne 0 ]]; then
+    echo -e "${C_RED}Debes volver a entrar realmente como usuario root para continuar.${C_RESET}" >&2
     exit 1
 fi
 
@@ -47,7 +294,6 @@ else
 fi
 OS_ID="${OS_ID,,}"
 case "$OS_ID" in ubuntu|debian) ;; *) echo -e "${C_RED}Sistema no soportado: ${PRETTY_NAME:-$OS_ID}${C_RESET}" >&2; exit 1 ;; esac
-
 command -v apt-get >/dev/null 2>&1 || { echo -e "${C_RED}APT no está disponible.${C_RESET}" >&2; exit 1; }
 
 msg() {
@@ -60,7 +306,6 @@ msg() {
 }
 
 repeat_char() { local n="$1" ch="$2" out=""; while (( n > 0 )); do out+="$ch"; n=$((n-1)); done; printf '%s' "$out"; }
-
 last_activity_line() {
     local log="$1" line
     line=$(tail -n 60 "$log" 2>/dev/null | grep -aE '^(Get:|Hit:|Ign:|Err:|Fetched |Reading package|Building dependency|Reading state|Selecting previously|Preparing to unpack|Unpacking |Setting up |Processing triggers|Downloading |Installing |Removing )' | tail -n1 || true)
@@ -68,9 +313,6 @@ last_activity_line() {
     [[ ${#line} -gt 58 ]] && line="${line:0:55}..."
     printf '%s' "$line"
 }
-
-# Progreso robusto: un archivo de estado pertenece al job original, evitando
-# PID reutilizado y evitando el caso de "0s" mientras wait() queda bloqueado.
 run_activity() {
     local label="$1"; shift
     local log status pid rc elapsed=0 pos=0 dir=1 width=28 i bar detail=""
@@ -85,7 +327,6 @@ run_activity() {
         exit "$rc"
     ) >"$log" 2>&1 &
     pid=$!
-
     while [[ ! -s "$status" ]]; do
         bar=""
         for ((i=0; i<width; i++)); do [[ $i -eq $pos ]] && bar+="#" || bar+="-"; done
@@ -106,7 +347,6 @@ run_activity() {
         fi
         if ! kill -0 "$pid" 2>/dev/null && [[ ! -s "$status" ]]; then sleep 1; break; fi
     done
-
     wait "$pid" 2>/dev/null || true
     rc=$(cat "$status" 2>/dev/null || printf '1')
     [[ "$rc" =~ ^[0-9]+$ ]] || rc=1
@@ -119,7 +359,6 @@ run_activity() {
     rm -f "$log" "$status"
     return "$rc"
 }
-
 apt_lock_pids() {
     local -a locks=(/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock)
     if command -v fuser >/dev/null 2>&1; then
@@ -127,11 +366,9 @@ apt_lock_pids() {
     elif command -v lsof >/dev/null 2>&1; then
         lsof -t -- "${locks[@]}" 2>/dev/null | sort -un || true
     else
-        # No adivinar por nombre de proceso. apt-get aplicará su propio timeout.
         return 0
     fi
 }
-
 wait_apt() {
     local waited=0 pids=""
     while :; do
@@ -143,7 +380,6 @@ wait_apt() {
         (( waited < APT_LOCK_WAIT )) || { printf '\n'; msg err "APT/DPKG sigue bloqueado después de ${APT_LOCK_WAIT}s."; return 1; }
     done
 }
-
 apt_run() {
     wait_apt || return 1
     local -a opts=(
@@ -160,7 +396,6 @@ apt_run() {
         apt-get "${opts[@]}" "$@"
     fi
 }
-
 backup_sources() {
     [[ -n "$APT_BACKUP_DIR" ]] && return 0
     APT_BACKUP_DIR="/var/backups/golden-client-apt-$(date +%Y%m%d-%H%M%S)"
@@ -168,16 +403,13 @@ backup_sources() {
     cp -a /etc/apt/sources.list "$APT_BACKUP_DIR/" 2>/dev/null || true
     cp -a /etc/apt/sources.list.d "$APT_BACKUP_DIR/" 2>/dev/null || true
 }
-
 ubuntu_eol_candidate() {
     case "$OS_VERSION" in
         10.*|11.*|12.*|13.*|14.*|15.*|16.*|17.*|18.*|19.*|20.10|21.*|22.10|23.*|24.10|25.*) return 0 ;;
         *) return 1 ;;
     esac
 }
-
 debian_eol_candidate() { local m="${OS_VERSION%%.*}"; [[ "$m" =~ ^[0-9]+$ ]] && (( m <= 10 )); }
-
 repair_eol_sources() {
     local f changed=1
     backup_sources
@@ -210,14 +442,12 @@ repair_eol_sources() {
     fi
     return "$changed"
 }
-
 pkg_installed() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'ok installed'; }
 pkg_available() {
     local c
     c=$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')
     [[ -n "$c" && "$c" != '(none)' ]]
 }
-
 install_group() {
     local label="$1" required="$2"; shift 2
     local -a todo=(); local p
@@ -228,11 +458,6 @@ install_group() {
     ((${#todo[@]})) || { msg ok "$label: ya estaba listo"; return 0; }
     run_activity "$label" apt_run install -y --no-install-recommends "${todo[@]}"
 }
-
-# Instala paquetes que traen servicios sin permitir que el postinst intente
-# arrancarlos en mitad de APT. En algunas imágenes VPS (especialmente Debian)
-# ese arranque puede quedar esperando varios minutos. El servicio se inicia
-# explícitamente después, cuando Golden ya terminó de configurarlo.
 apt_install_no_autostart() {
     local created_policy=0 backup=""
     if [[ -e /usr/sbin/policy-rc.d ]]; then
@@ -246,10 +471,8 @@ EOF_POLICY
         chmod 0755 /usr/sbin/policy-rc.d
         created_policy=1
     fi
-
     local rc=0
     apt_run install -y --no-install-recommends "$@" || rc=$?
-
     if (( created_policy == 1 )); then
         rm -f /usr/sbin/policy-rc.d
     elif [[ -n "$backup" && -e "$backup" ]]; then
@@ -258,7 +481,6 @@ EOF_POLICY
     fi
     return "$rc"
 }
-
 install_group_no_autostart() {
     local label="$1" required="$2"; shift 2
     local -a todo=(); local p
@@ -276,7 +498,6 @@ install_group_no_autostart() {
     ((${#todo[@]})) || { msg ok "$label: ya estaba listo"; return 0; }
     run_activity "$label" apt_install_no_autostart "${todo[@]}"
 }
-
 safe_wget() {
     local url="${1:-}" dest="${2:-}" tmp
     [[ -n "$url" && -n "$dest" ]] || return 2
@@ -294,15 +515,15 @@ clear 2>/dev/null || true
 echo "======================================================================"
 echo "        GOLDEN ADM PRO - INSTALADOR REV26 UNIVERSAL"
 echo "======================================================================"
-echo "Sistema : ${PRETTY_NAME:-$OS_ID $OS_VERSION}"
-echo "Fase    : Preparando instalación"
+echo "Sistema   : ${PRETTY_NAME:-$OS_ID $OS_VERSION}"
+echo "Proveedor : $(detect_provider)"
+echo "Usuario   : root (elevación verificada)"
+echo "Fase      : Preparando instalación"
 echo "======================================================================"
-
 msg info "Comprobando estado real de APT/DPKG"
 wait_apt || exit 1
 msg ok "APT/DPKG disponible"
 run_activity "Reconfigurando DPKG" dpkg --configure -a || true
-
 if ! run_activity "Actualizando repositorios" apt_run update; then
     if repair_eol_sources; then
         run_activity "Repositorios EOL reparados" apt_run update || { msg err "APT sigue fallando después de reparar repositorios."; exit 1; }
@@ -311,35 +532,22 @@ if ! run_activity "Actualizando repositorios" apt_run update; then
         exit 1
     fi
 fi
-
-# Compartir con los módulos que los índices APT acaban de actualizarse. Evita
-# ejecutar apt update otra vez al abrir el primer protocolo.
 mkdir -p /var/cache/golden 2>/dev/null || true
 touch /var/cache/golden/apt-update.stamp 2>/dev/null || true
-
-# Núcleo mínimo para instalar y ejecutar Golden. Herramientas de compilación
-# (gcc/cmake/build-essential/pip) se instalan únicamente cuando un módulo las
-# necesita; esto reduce mucho el tiempo inicial en Debian/Ubuntu limpios.
 install_group "Red y certificados" 1 ca-certificates wget curl || exit 1
 install_group "Núcleo de ejecución" 1 python3 bc unzip zip lsof procps psmisc gawk || exit 1
 install_group "Utilidades Golden" 0 nano screen jq net-tools nload || true
-# Apache es parte del núcleo Golden, pero se instala SIN arrancarlo durante APT.
-# Esto evita bloqueos de postinst/service-start en Debian/Ubuntu VPS.
 install_group_no_autostart "Servidor web Apache" 1 apache2 || exit 1
-
-# Compatibilidad opcional. No aborta releases donde el paquete todavía no existe.
 if pkg_available python-is-python3 && ! pkg_installed python-is-python3; then
     run_activity "Compatibilidad Python" apt_run install -y --no-install-recommends python-is-python3 || true
 fi
 if [[ "$OS_ID" == ubuntu ]] && pkg_available software-properties-common && ! pkg_installed software-properties-common; then
     run_activity "Herramientas Ubuntu" apt_run install -y --no-install-recommends software-properties-common || true
 fi
-
 if [[ -f /etc/pam.d/common-password ]] && grep -q 'pam_cracklib\.so' /etc/pam.d/common-password; then
     cp -a /etc/pam.d/common-password /etc/pam.d/common-password.golden.bak 2>/dev/null || true
     sed -i 's/.*pam_cracklib.so.*/password sufficient pam_unix.so sha512 shadow nullok try_first_pass/' /etc/pam.d/common-password || true
 fi
-
 msg info "Descargando instalador principal"
 SECOND_STAGE="$HOME/LuciferMX2019.sh"
 if ! safe_wget "$SECOND_STAGE_URL" "$SECOND_STAGE"; then msg err "No se pudo descargar LuciferMX2019.sh."; exit 1; fi
