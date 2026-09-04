@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GOLDEN ADM PRO - bootstrap REV26 TEST - ROOT LOGIN PREP
+# GOLDEN ADM PRO - bootstrap REV26.1 ROOT REAL + CLOUD APT FAILOVER + GOLD UI
 # Ubuntu/Debian antiguos y modernos con APT.
 # Si la VPS inicia como ubuntu/debian/admin/ec2-user/etc:
 #   1) detecta proveedor;
@@ -23,6 +23,8 @@ NET_TIMEOUT="${GOLDEN_NET_TIMEOUT:-12}"
 NET_TRIES="${GOLDEN_NET_TRIES:-3}"
 APT_LOCK_WAIT="${GOLDEN_APT_LOCK_WAIT:-600}"
 APT_STEP_TIMEOUT="${GOLDEN_APT_STEP_TIMEOUT:-600}"
+APT_UPDATE_TIMEOUT="${GOLDEN_APT_UPDATE_TIMEOUT:-45}"
+APT_UPDATE_NET_TIMEOUT="${GOLDEN_APT_UPDATE_NET_TIMEOUT:-8}"
 SECOND_STAGE_URL="${GOLDEN_INSTALLER_URL:-https://raw.githubusercontent.com/satanas66666/golden-system2/main/LuciferMX2019.sh}"
 APT_BACKUP_DIR=""
 
@@ -33,6 +35,10 @@ msg_early() {
         warn) echo -e "${C_YELLOW}[!]${C_RESET} $2" ;;
         err)  echo -e "${C_RED}[✗]${C_RESET} $2" ;;
     esac
+}
+
+gold_bar() {
+    echo -e "${C_YELLOW}=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=${C_RESET}"
 }
 
 detect_provider() {
@@ -68,9 +74,9 @@ prepare_real_root_login() {
     user="$(id -un 2>/dev/null || echo usuario)"
 
     echo
-    echo "======================================================================"
-    echo "       GOLDEN ADM PRO - CONVERTIR ACCESO A ROOT REAL"
-    echo "======================================================================"
+    gold_bar
+    echo -e "${C_YELLOW}       GOLDEN ADM PRO - CONVERTIR ACCESO A ROOT REAL${C_RESET}"
+    gold_bar
     echo "Proveedor detectado : $provider"
     echo "Usuario actual       : $user"
     echo "UID                  : $(id -u)"
@@ -78,7 +84,7 @@ prepare_real_root_login() {
     echo "Golden NO continuará todavía."
     echo "Primero se preparará el usuario root con SU PROPIA contraseña."
     echo "Después debes volver a entrar por SSH como root."
-    echo "======================================================================"
+    gold_bar
 
     if ! command -v sudo >/dev/null 2>&1; then
         msg_early err "Este usuario no tiene sudo disponible."
@@ -90,6 +96,12 @@ prepare_real_root_login() {
     cat >"$helper" <<'EOF_ROOT_HELPER'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+
+C_RESET='\033[0m'
+C_GOLD='\033[1;33m'
+gold_bar() {
+    echo -e "${C_GOLD}=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=${C_RESET}"
+}
 
 provider="${1:-VPS/Cloud}"
 orig_user="${2:-usuario}"
@@ -106,9 +118,9 @@ cp -a "$SSHCFG" "$BACKUP/sshd_config"
 [[ -d /etc/ssh/sshd_config.d ]] && cp -a /etc/ssh/sshd_config.d "$BACKUP/" 2>/dev/null || true
 
 echo
-echo "======================================================================"
-echo "                 CREAR CONTRASEÑA DE ROOT"
-echo "======================================================================"
+gold_bar
+echo -e "${C_GOLD}                 CREAR CONTRASEÑA DE ROOT${C_RESET}"
+gold_bar
 echo "Proveedor : $provider"
 echo "Usuario   : $orig_user"
 echo
@@ -116,7 +128,7 @@ echo "Ahora escribe la NUEVA contraseña que vas a usar cuando ingreses como:"
 echo "    usuario: root"
 echo
 echo "La contraseña se solicitará DOS veces y NO se guardará en Golden."
-echo "======================================================================"
+gold_bar
 echo
 
 if ! passwd root; then
@@ -218,9 +230,9 @@ if ! "$sshd_bin" -t; then
 fi
 
 echo
-echo "======================================================================"
-echo "                       ROOT PREPARADO"
-echo "======================================================================"
+gold_bar
+echo -e "${C_GOLD}                       ROOT PREPARADO${C_RESET}"
+gold_bar
 echo "[PASS] Contraseña propia de root configurada."
 echo "[PASS] PermitRootLogin efectivo       : $permit"
 echo "[PASS] PasswordAuthentication efectivo : $passauth"
@@ -234,7 +246,7 @@ echo "    Usuario    : root"
 echo "    Contraseña : la que acabas de crear"
 echo
 echo "Cuando logres entrar como root, vuelve a ejecutar el instalador Golden."
-echo "======================================================================"
+gold_bar
 EOF_ROOT_HELPER
     chmod 700 "$helper"
 
@@ -382,16 +394,33 @@ wait_apt() {
 }
 apt_run() {
     wait_apt || return 1
+    local cmd="${1:-}" step_timeout="$APT_STEP_TIMEOUT" retries=2 net_timeout=25
+    local -a ipopt=()
+
+    # apt update is the network-discovery phase: fail fast on a dead cloud mirror
+    # instead of leaving the installer waiting for many minutes.
+    if [[ "$cmd" == "update" ]]; then
+        step_timeout="$APT_UPDATE_TIMEOUT"
+        retries=0
+        net_timeout="$APT_UPDATE_NET_TIMEOUT"
+    fi
+
+    # Avoid a broken/partial IPv6 route causing long APT stalls when IPv4 exists.
+    if command -v ip >/dev/null 2>&1 && ip -4 route get 1.1.1.1 >/dev/null 2>&1; then
+        ipopt=(-o Acquire::ForceIPv4=true)
+    fi
+
     local -a opts=(
         -o DPkg::Lock::Timeout="$APT_LOCK_WAIT"
-        -o Acquire::Retries=2
-        -o Acquire::http::Timeout=25
-        -o Acquire::https::Timeout=25
+        -o Acquire::Retries="$retries"
+        -o Acquire::http::Timeout="$net_timeout"
+        -o Acquire::https::Timeout="$net_timeout"
         -o Dpkg::Use-Pty=0
         -o Dpkg::Options::=--force-confold
+        "${ipopt[@]}"
     )
     if command -v timeout >/dev/null 2>&1; then
-        timeout "$APT_STEP_TIMEOUT" apt-get "${opts[@]}" "$@"
+        timeout "$step_timeout" apt-get "${opts[@]}" "$@"
     else
         apt-get "${opts[@]}" "$@"
     fi
@@ -402,6 +431,61 @@ backup_sources() {
     mkdir -p "$APT_BACKUP_DIR"
     cp -a /etc/apt/sources.list "$APT_BACKUP_DIR/" 2>/dev/null || true
     cp -a /etc/apt/sources.list.d "$APT_BACKUP_DIR/" 2>/dev/null || true
+}
+
+repair_cloud_ubuntu_mirror() {
+    [[ "$OS_ID" == "ubuntu" ]] || return 1
+
+    local arch target f changed=1
+    arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+    case "$arch" in
+        amd64|i386|x86_64) target="http://archive.ubuntu.com/ubuntu/" ;;
+        arm64|armhf|aarch64) target="http://ports.ubuntu.com/ubuntu-ports/" ;;
+        *) target="http://archive.ubuntu.com/ubuntu/" ;;
+    esac
+
+    # Only touch a regional/cloud Ubuntu archive hostname; leave security,
+    # PPAs and any custom repositories untouched.
+    if ! grep -RqsE 'https?://[^[:space:]]+\.archive\.ubuntu\.com/ubuntu/?' \
+         /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null; then
+        return 1
+    fi
+
+    backup_sources
+    msg warn "Mirror regional/cloud de Ubuntu no respondió; aplicando fallback oficial."
+
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+        [[ -f "$f" ]] || continue
+        if grep -qE 'https?://[^[:space:]]+\.archive\.ubuntu\.com/ubuntu/?' "$f" 2>/dev/null; then
+            python3 - "$f" "$target" <<'PY_MIRROR'
+from pathlib import Path
+import re, sys
+p = Path(sys.argv[1])
+target = sys.argv[2]
+text = p.read_text(encoding="utf-8", errors="surrogateescape")
+# Examples matched:
+# us-east-1.ec2.archive.ubuntu.com
+# us-west1.gce.archive.ubuntu.com
+# azure.archive.ubuntu.com
+# us.archive.ubuntu.com
+new = re.sub(
+    r'https?://(?!archive\.ubuntu\.com(?:/|$))[A-Za-z0-9.-]+\.archive\.ubuntu\.com/ubuntu/?',
+    target,
+    text,
+)
+p.write_text(new, encoding="utf-8", errors="surrogateescape")
+PY_MIRROR
+            changed=0
+        fi
+    done
+
+    if (( changed == 0 )); then
+        rm -rf /var/lib/apt/lists/partial 2>/dev/null || true
+        mkdir -p /var/lib/apt/lists/partial
+        msg ok "Fallback APT aplicado: $target"
+        msg info "Respaldo de repositorios: $APT_BACKUP_DIR"
+    fi
+    return "$changed"
 }
 ubuntu_eol_candidate() {
     case "$OS_VERSION" in
@@ -512,20 +596,30 @@ safe_wget() {
 }
 
 clear 2>/dev/null || true
-echo "======================================================================"
-echo "        GOLDEN ADM PRO - INSTALADOR REV26 UNIVERSAL"
-echo "======================================================================"
+gold_bar
+echo -e "${C_YELLOW}        GOLDEN ADM PRO - INSTALADOR REV26.1 UNIVERSAL${C_RESET}"
+gold_bar
 echo "Sistema   : ${PRETTY_NAME:-$OS_ID $OS_VERSION}"
 echo "Proveedor : $(detect_provider)"
 echo "Usuario   : root (elevación verificada)"
 echo "Fase      : Preparando instalación"
-echo "======================================================================"
+gold_bar
 msg info "Comprobando estado real de APT/DPKG"
 wait_apt || exit 1
 msg ok "APT/DPKG disponible"
 run_activity "Reconfigurando DPKG" dpkg --configure -a || true
+
 if ! run_activity "Actualizando repositorios" apt_run update; then
-    if repair_eol_sources; then
+    if repair_cloud_ubuntu_mirror; then
+        run_activity "Repositorios Ubuntu fallback" apt_run update || {
+            if repair_eol_sources; then
+                run_activity "Repositorios EOL reparados" apt_run update || { msg err "APT sigue fallando después de los fallbacks."; exit 1; }
+            else
+                msg err "APT sigue fallando después del fallback de mirror."
+                exit 1
+            fi
+        }
+    elif repair_eol_sources; then
         run_activity "Repositorios EOL reparados" apt_run update || { msg err "APT sigue fallando después de reparar repositorios."; exit 1; }
     else
         msg err "apt-get update falló. Revisa red/DNS/repositorios de esta VPS."
@@ -554,6 +648,6 @@ if ! safe_wget "$SECOND_STAGE_URL" "$SECOND_STAGE"; then msg err "No se pudo des
 if ! bash -n "$SECOND_STAGE"; then msg err "LuciferMX2019.sh contiene un error de sintaxis."; rm -f "$SECOND_STAGE"; exit 1; fi
 chmod 700 "$SECOND_STAGE"
 msg ok "Bootstrap terminado. Iniciando instalador principal..."
-echo "======================================================================"
+gold_bar
 sleep 1
 exec bash "$SECOND_STAGE"
