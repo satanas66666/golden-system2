@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GOLDEN ADM PRO - bootstrap REV26.3 ROOT REAL + CLOUD APT + PANEL GOLD EXACT
+# GOLDEN ADM PRO - bootstrap REV26.3.1 ROOT REAL + CLOUD APT + PANEL GOLD RUNTIME FIX
 # Ubuntu/Debian antiguos y modernos con APT.
 # Si la VPS inicia como ubuntu/debian/admin/ec2-user/etc:
 #   1) detecta proveedor;
@@ -181,7 +181,7 @@ cp -a "$SSHCFG" "$BACKUP/sshd_config"
 
 echo
 gold_bar
-printf '%b\n' "${C_GOLD}                 CREAR CONTRASEÑA DE ROOT${C_RESET}"
+gold_title "                 CREAR CONTRASEÑA DE ROOT"
 gold_bar
 echo "Proveedor : $provider"
 echo "Usuario   : $orig_user"
@@ -293,7 +293,7 @@ fi
 
 echo
 gold_bar
-printf '%b\n' "${C_GOLD}                       ROOT PREPARADO${C_RESET}"
+gold_title "                       ROOT PREPARADO"
 gold_bar
 echo "[PASS] Contraseña propia de root configurada."
 echo "[PASS] PermitRootLogin efectivo       : $permit"
@@ -659,7 +659,7 @@ safe_wget() {
 
 clear 2>/dev/null || true
 gold_bar
-printf '%b\n' "${C_YELLOW}        GOLDEN ADM PRO - INSTALADOR REV26.3 UNIVERSAL${C_RESET}"
+printf '%b\n' "${C_YELLOW}        GOLDEN ADM PRO - INSTALADOR REV26.3.1 UNIVERSAL${C_RESET}"
 gold_bar
 echo "Sistema   : ${PRETTY_NAME:-$OS_ID $OS_VERSION}"
 echo "Proveedor : $(detect_provider)"
