@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GOLDEN ADM PRO - bootstrap REV26.1 ROOT REAL + CLOUD APT FAILOVER + GOLD UI
+# GOLDEN ADM PRO - bootstrap REV26.2 ROOT REAL + CLOUD APT FAILOVER + GOLD UI EXACT
 # Ubuntu/Debian antiguos y modernos con APT.
 # Si la VPS inicia como ubuntu/debian/admin/ec2-user/etc:
 #   1) detecta proveedor;
@@ -14,10 +14,10 @@ set -u
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-C_RESET='\033[0m'
+C_RESET=$'\033[0m'
 C_RED='\033[1;31m'
 C_GREEN='\033[1;32m'
-C_YELLOW='\033[1;33m'
+C_YELLOW=$'\033[1;33m'
 C_CYAN='\033[1;36m'
 NET_TIMEOUT="${GOLDEN_NET_TIMEOUT:-12}"
 NET_TRIES="${GOLDEN_NET_TRIES:-3}"
@@ -38,7 +38,7 @@ msg_early() {
 }
 
 gold_bar() {
-    echo -e "${C_YELLOW}=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=${C_RESET}"
+    printf '%b\n' "${C_YELLOW}=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=${C_RESET}"
 }
 
 detect_provider() {
@@ -75,7 +75,7 @@ prepare_real_root_login() {
 
     echo
     gold_bar
-    echo -e "${C_YELLOW}       GOLDEN ADM PRO - CONVERTIR ACCESO A ROOT REAL${C_RESET}"
+    printf '%b\n' "${C_YELLOW}       GOLDEN ADM PRO - CONVERTIR ACCESO A ROOT REAL${C_RESET}"
     gold_bar
     echo "Proveedor detectado : $provider"
     echo "Usuario actual       : $user"
@@ -97,10 +97,10 @@ prepare_real_root_login() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-C_RESET='\033[0m'
-C_GOLD='\033[1;33m'
+C_RESET=$'\033[0m'
+C_GOLD=$'\033[1;33m'
 gold_bar() {
-    echo -e "${C_GOLD}=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=${C_RESET}"
+    printf '%b\n' "${C_GOLD}=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=×=${C_RESET}"
 }
 
 provider="${1:-VPS/Cloud}"
@@ -119,7 +119,7 @@ cp -a "$SSHCFG" "$BACKUP/sshd_config"
 
 echo
 gold_bar
-echo -e "${C_GOLD}                 CREAR CONTRASEÑA DE ROOT${C_RESET}"
+printf '%b\n' "${C_GOLD}                 CREAR CONTRASEÑA DE ROOT${C_RESET}"
 gold_bar
 echo "Proveedor : $provider"
 echo "Usuario   : $orig_user"
@@ -231,7 +231,7 @@ fi
 
 echo
 gold_bar
-echo -e "${C_GOLD}                       ROOT PREPARADO${C_RESET}"
+printf '%b\n' "${C_GOLD}                       ROOT PREPARADO${C_RESET}"
 gold_bar
 echo "[PASS] Contraseña propia de root configurada."
 echo "[PASS] PermitRootLogin efectivo       : $permit"
@@ -597,7 +597,7 @@ safe_wget() {
 
 clear 2>/dev/null || true
 gold_bar
-echo -e "${C_YELLOW}        GOLDEN ADM PRO - INSTALADOR REV26.1 UNIVERSAL${C_RESET}"
+printf '%b\n' "${C_YELLOW}        GOLDEN ADM PRO - INSTALADOR REV26.2 UNIVERSAL${C_RESET}"
 gold_bar
 echo "Sistema   : ${PRETTY_NAME:-$OS_ID $OS_VERSION}"
 echo "Proveedor : $(detect_provider)"
