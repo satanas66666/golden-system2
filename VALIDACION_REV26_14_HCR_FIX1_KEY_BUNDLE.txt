@@ -1,0 +1,26 @@
+NEW-GOLDEN ADM PRO REV26.14 HCR FIX1
+
+CAUSA DEL ERROR CORREGIDA
+- hcr.sh y hcr-server existían dentro de golden.zip, pero no estaban en BASICINST de gerar.sh.
+- Por eso una KEY de instalación completa seguía generando solo el catálogo anterior (46 archivos).
+- LuciferMX2019.sh ya exigía HCR en la validación final, por lo que terminaba con:
+  Componente requerido ausente o vacío: /etc/ger-inst/hcr.sh
+
+FIX
+- BASICINST ahora incluye hcr.sh y hcr-server.
+- Una KEY completa nueva contiene 48 payloads (46 anteriores + 2 HCR).
+- hcr.sh y hcr-server se entregan a /etc/ger-inst.
+- Los 15 módulos anteriores no se modifican.
+- goldengen.sh valida también que gerar.sh incluya ambos payloads HCR antes de instalar el proyecto del generador.
+
+VALIDACIONES
+- bash -n goldengen.sh: PASS (verificado por script externo)
+- bash -n gerar.sh: PASS (verificado por script externo)
+- golden.zip contiene golden/SCRIPT/hcr.sh: PASS
+- golden.zip contiene golden/SCRIPT/hcr-server: PASS
+- BASICINST contiene hcr.sh: PASS
+- BASICINST contiene hcr-server: PASS
+- Total BASICINST: 48 archivos
+- HCR manager SHA-256: db44bfe75ac6db7cb2281f3304b6b443a0d5d2910f525c0d60df68f7ef8215cd
+- HCR server SHA-256: 68a66ed49750965680315a60ce05260cdbb77c2b86b3a80938844cb4855fa085
+- golden.zip SHA-256: c0f579c49516edb2c30f2124985ac7fb73bffb13b31b74ea566f39f932264c0a

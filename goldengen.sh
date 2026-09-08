@@ -415,6 +415,15 @@ prepare_artifacts() {
         [[ -f "$TMP_DIR/extract/golden/SCRIPT/$payload" ]] ||
             die "golden.zip incompleto: falta $payload."
     done
+
+    # REV26.14 FIX1: no basta con que HCR exista dentro de golden.zip.
+    # El generador de KEYS debe incluirlo también en BASICINST, o el paquete
+    # rápido del cliente quedaría sin hcr.sh/hcr-server y fallaría al final.
+    [[ -f "$TMP_DIR/extract/golden/gerar.sh" ]] || die "golden.zip incompleto: falta gerar.sh."
+    grep -qE '(^|[[:space:]])hcr\.sh([[:space:]]|$)' "$TMP_DIR/extract/golden/gerar.sh" ||
+        die "gerar.sh no incluye hcr.sh en BASICINST."
+    grep -qE '(^|[[:space:]])hcr-server([[:space:]]|$)' "$TMP_DIR/extract/golden/gerar.sh" ||
+        die "gerar.sh no incluye hcr-server en BASICINST."
     [[ "$(tr -d '\r\n ' <"$TMP_DIR/extract/golden/.golden_revision" 2>/dev/null || true)" == "REV26" ]] ||
         die "golden.zip no corresponde a REV26; evita mezclar revisiones."
 }
