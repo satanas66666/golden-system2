@@ -1,26 +1,111 @@
-NEW-GOLDEN ADM PRO REV26.14 HCR FIX1
+NEW-GOLDEN ADM PRO REV26.14 HCR FIX2 - EDIT PROFILE PORT
+=======================================================
 
-CAUSA DEL ERROR CORREGIDA
-- hcr.sh y hcr-server existían dentro de golden.zip, pero no estaban en BASICINST de gerar.sh.
-- Por eso una KEY de instalación completa seguía generando solo el catálogo anterior (46 archivos).
-- LuciferMX2019.sh ya exigía HCR en la validación final, por lo que terminaba con:
-  Componente requerido ausente o vacío: /etc/ger-inst/hcr.sh
+BASE EXACTA
+-----------
+NEW_GOLDEN_ADM_PRO_REV26_14_HCR_FIX1_GITHUB_UPLOAD.zip
+SHA-256 base: bed1c4ed6ed29b5d0e4131a228ac5fd694f97312512a1db2ba64001579d7eb40
 
-FIX
-- BASICINST ahora incluye hcr.sh y hcr-server.
-- Una KEY completa nueva contiene 48 payloads (46 anteriores + 2 HCR).
-- hcr.sh y hcr-server se entregan a /etc/ger-inst.
-- Los 15 módulos anteriores no se modifican.
-- goldengen.sh valida también que gerar.sh incluya ambos payloads HCR antes de instalar el proyecto del generador.
+OBJETIVO UNICO
+--------------
+Agregar dentro del submenú HCR existente la opción:
+  [15] Editar perfil Frame/Poll de puerto instalado
+sin modificar los otros módulos, protocolos ni el menú principal NEW-GOLDEN.
+
+COMPORTAMIENTO
+--------------
+- Permite seleccionar por número de puerto el HCR principal o cualquier listener HCR adicional ya creado.
+- Muestra Frame/Poll actual antes de cambiar.
+- Perfiles disponibles:
+  1) 16384 / 8s
+  2) 16384 / 6s
+  3) 16384 / 4s
+  4) 12288 / 6s
+  5) 8192 / 6s
+  6) 6144 / 8s
+  7) 4000 / 6s
+  8) Manual: Frame 512..16384 + Poll ms/s/m
+- En manual, un Poll numérico como 6 se normaliza a 6s.
+- Reinicia SOLO el listener seleccionado.
+- Conserva puerto, transport, firewall, otros listeners y AUTO-TUNE.
+- Si el listener no vuelve sano, restaura automáticamente la unidad anterior.
+- Para listener adicional, actualiza hcr-extra-ports.conf solo después de health PASS.
+
+AISLAMIENTO DEL CAMBIO
+----------------------
+Dentro de golden.zip:
+- 67 archivos antes / 67 archivos después.
+- Añadidos: 0.
+- Eliminados: 0.
+- Archivo runtime distinto: EXACTAMENTE 1:
+  golden/SCRIPT/hcr.sh
+
+No cambiaron:
+- golden/SCRIPT/menu
+- golden/menu
+- golden/gerar.sh
+- golden/SCRIPT/hcr-server
+- BHTTP
+- XHTTP/H2
+- BADVPN
+- DROPBEAR
+- HAPROXY
+- OPENVPN
+- PROXYGO
+- SHARED 80/443
+- SLOWDNS
+- SQUID
+- SSL
+- V2RAY
+- WEBSOCKET
+- demás módulos existentes.
+
+El menú principal conserva su numeración histórica y HCR SERVER sigue siendo [16].
+La nueva [15] existe ÚNICAMENTE dentro del submenú HCR.
+
+HCR
+---
+Manager HCR interno: 1.5.2 -> 1.5.3
+hcr.sh SHA-256 anterior:
+  db44bfe75ac6db7cb2281f3304b6b443a0d5d2910f525c0d60df68f7ef8215cd
+hcr.sh SHA-256 nuevo:
+  9918927ab96477eb3c0fd6658fd53d0e03d2ef8035d5ed19832cbcc7c868df3d
+
+hcr-server oficial 0.0.3 - Patch 1: BYTE-IDENTICO
+SHA-256:
+  68a66ed49750965680315a60ce05260cdbb77c2b86b3a80938844cb4855fa085
+
+Golden.zip nuevo SHA-256:
+  9c1542235e233b6ffb4032741651f3a6a23719752fad22fd25c4537c6522d8da
+
+ARCHIVOS EXTERNOS CONSERVADOS BYTE-IDENTICOS
+--------------------------------------------
+goldengen.sh:
+  1756a412186f31b42ac0c9fcaa1a65d326537dad3c81b62519b985e0296c584e
+diablo2020.sh:
+  dbbe435aa29d09bf8622fda91578e180a4258fe61ec033a02f1fbcfdb8fa5dee
+http-server.sh:
+  07802335718bc752042a9a131ec700fc828e0ccbbcdfb48a85b9a6198b35d62e
+LuciferMX2019.sh:
+  944fdec800d47a3f2339b8e9eb861b8db4591b15ee35f22c5a2fa14fb9a19c55
 
 VALIDACIONES
-- bash -n goldengen.sh: PASS (verificado por script externo)
-- bash -n gerar.sh: PASS (verificado por script externo)
-- golden.zip contiene golden/SCRIPT/hcr.sh: PASS
-- golden.zip contiene golden/SCRIPT/hcr-server: PASS
-- BASICINST contiene hcr.sh: PASS
-- BASICINST contiene hcr-server: PASS
-- Total BASICINST: 48 archivos
-- HCR manager SHA-256: db44bfe75ac6db7cb2281f3304b6b443a0d5d2910f525c0d60df68f7ef8215cd
-- HCR server SHA-256: 68a66ed49750965680315a60ce05260cdbb77c2b86b3a80938844cb4855fa085
-- golden.zip SHA-256: c0f579c49516edb2c30f2124985ac7fb73bffb13b31b74ea566f39f932264c0a
+------------
+- bash -n hcr.sh: PASS
+- bash -n gerar.sh: PASS
+- bash -n golden/SCRIPT/menu: PASS
+- bash -n golden/menu: PASS
+- bash -n goldengen.sh: PASS
+- hcr-server -version: hcr-server version 0.0.3 - Patch 1
+- BASICINST: 48 payloads, HCR incluido: PASS
+- Diff de contenido de golden.zip: solo golden/SCRIPT/hcr.sh cambia: PASS
+- Mock funcional edición principal 16384/8s -> 12288/6s: PASS
+- Mock funcional edición extra 8080 16384/8s -> 4000/6s: PASS
+- Persistencia de extra tras health PASS: PASS
+- Normalización Poll 6 -> 6s: PASS
+- Golden.zip unzip -t: PASS
+
+NOTA
+----
+El archivo de validación cambia únicamente para reflejar hashes y pruebas del FIX2;
+no participa en runtime.
