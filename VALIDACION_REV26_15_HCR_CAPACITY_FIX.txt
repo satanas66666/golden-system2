@@ -1,0 +1,59 @@
+NEW-GOLDEN ADM PRO REV26.15 - HCR CAPACITY FIX / AUTO-TUNE
+
+OBJETIVO
+Eliminar rechazos intermitentes de nuevas sesiones HCR causados por los límites
+internos por defecto del binario hcr-server 0.0.3 Patch 1.
+
+HALLAZGO CONFIRMADO EN EL BINARIO
+- max-sessions default: 32
+- max-connections default: 2048
+- max-sessions-per-ip default: min(16, max-sessions)
+
+REV26.14 no pasaba estas tres banderas en ExecStart, por lo que una VPS de
+12 vCPU / ~24 GB seguía limitada a 32 sesiones HCR globales y 16 por IP,
+aunque el AUTO-TUNE mostrara NOFILE 196608, Tasks 6144 y memoria abundante.
+Esto explica el mensaje de cliente "El servidor HCR rechazó la solicitud de conexión".
+
+CAMBIO REV26.15
+Solo golden/SCRIPT/hcr.sh cambia. El binario hcr-server queda byte-idéntico.
+AUTO-TUNE añade límites explícitos por listener:
+- presupuesto total máximo: 1024 sesiones por VPS
+- hasta 96 sesiones por vCPU
+- hasta 1 sesión por ~20 MiB de RAM
+- el presupuesto se divide entre listeners reales
+- max-connections = max-sessions * 64, máximo 65536
+- max-sessions-per-ip = 50% de max-sessions, máximo 512
+
+PARA 12 vCPU / ~23976 MB / 1 LISTENER
+- max-sessions: 1024
+- max-connections: 65536
+- max-sessions-per-ip: 512
+- se conservan NOFILE/TasksMax/MemoryHigh/MemoryMax del AUTO-TUNE existente
+
+NO SE MODIFICA
+- hcr-server (binario)
+- Frame/Poll del puerto instalado (por ejemplo 3900 / 8s en la captura)
+- transport plain/tls/auto
+- SSH local 127.0.0.1:22
+- BHTTP / H2 / V2RAY / ProxyGo / SlowDNS / demás protocolos
+- sysctl globales del VPS
+- firewall
+- resto de NEW-GOLDEN
+
+VALIDACION DE DIFERENCIAS EN golden.zip
+Archivos modificados respecto REV26.14: 1
+- golden/SCRIPT/hcr.sh
+  OLD 79b6b18ba522630c75fe282ed126cadf83c1979a7ddf9e009243980bc6234c65
+  NEW 50d7458c30af4a9a2951eb6ce3cf01b9961c49caf03eb9b9d57bae6ad201da28
+
+SHA256 hcr-server (sin cambios): 68a66ed49750965680315a60ce05260cdbb77c2b86b3a80938844cb4855fa085
+SHA256 hcr.sh REV26.15: 50d7458c30af4a9a2951eb6ce3cf01b9961c49caf03eb9b9d57bae6ad201da28
+
+APLICACION SOBRE UNA VPS YA INSTALADA
+- Reemplazar/actualizar hcr.sh con REV26.15.
+- NO usar instalación rápida si se quiere conservar el perfil existente.
+- Ejecutar opción [14] Recalcular AUTO-TUNE CPU/RAM.
+- Esa ruta lee el perfil runtime actual (puerto/transport/Frame/Poll), reescribe
+  la unidad con los nuevos límites de capacidad y reinicia HCR.
+- En la captura recibida: puerto 8787, plain, Frame 3900, Poll 8s; ese perfil
+  debe conservarse.
