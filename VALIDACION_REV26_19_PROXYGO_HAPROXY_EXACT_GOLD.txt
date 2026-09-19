@@ -1,0 +1,14 @@
+NEW GOLDEN ADM PRO REV26.19 - PROXYGO HAPROXY EXACT GOLD
+
+Cambio exclusivamente visual en golden/SCRIPT/proxygo.sh.
+
+- Las barras de PROXYGO usan ahora exactamente el mismo ANSI de HAProxy SSL:
+  \033[0;33m ... \033[0m
+- Se corrigió el uso anterior de \033[1;33m.
+- linea() y linea2() quedaron con el mismo amarillo/oro no-bold de HAProxy SSL.
+- No se modificó la lógica funcional de ProxyGo.
+- No se modificaron puertos, servicios, systemd, instalación, desinstalación ni reinicio.
+- No se modificó HAProxy ni la función 443 compartido de REV26.17.
+- bash -n: PASS.
+
+Objetivo visual: que las líneas =×=×=×... de PROXYGO se vean con el mismo amarillo/oro que las líneas del panel HAPROXY SSL.

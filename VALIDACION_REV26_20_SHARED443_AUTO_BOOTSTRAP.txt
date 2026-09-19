@@ -1,0 +1,39 @@
+NEW GOLDEN ADM PRO REV26.20 - SHARED443 AUTO BOOTSTRAP
+
+BASE: REV26.19
+CAMBIO FUNCIONAL LIMITADO A:
+- golden/SCRIPT/haproxy.sh
+- golden/SCRIPT/proxygo.sh
+
+OBJETIVO:
+La opcion HAPROXY SSL [6] COMPARTIR 443 ahora soporta una instalacion nueva/VPS sin ProxyGo ni HAProxy previamente instalados.
+
+COMPORTAMIENTO:
+1. Verifica que OpenSSH/local TCP 22 este escuchando; no modifica SSH.
+2. Invoca el MISMO proxygo.sh del panel mediante un subcomando interno no interactivo.
+3. Si ProxyGo no esta instalado/verificado, usa instalar_proxygo_core() existente (mismo ProxyGo V4.5 actual).
+4. Si TCP 80 esta libre, crea con crear_servicio_proxygo() existente el servicio ProxyGo 80 -> 127.0.0.1:22, banner OK, y lo verifica ONLINE.
+5. Si TCP 80 ya pertenece a ProxyGo, conserva el servicio actual sin reescribirlo.
+6. Si TCP 80 pertenece a otro servicio, aborta sin matar ni reemplazarlo.
+7. Si HAProxy no esta instalado, usa instalar_base_haproxy() existente del mismo panel.
+8. Usa asegurar_cert_haproxy() existente y luego activa el 443 compartido.
+9. TCP 443 sigue teniendo un solo propietario: HAProxy.
+10. Post-TLS: SSL directo/SSH -> 127.0.0.1:22; Payload+SSL -> ProxyGo 127.0.0.1:80.
+11. maxconn HAProxy permanece en 20000.
+12. La proteccion contra ocupar 443 de otro proceso y el rollback de configuracion HAProxy permanecen activos.
+
+NO MODIFICADO:
+- Motores/protocolos restantes.
+- HCR, BHTTP, XHTTP/H2, V2RAY/XRAY, Squid, Dropbear, OpenVPN, SlowDNS, BadVPN.
+- Logica funcional normal del menu ProxyGo opciones [1]-[6].
+- Estilo amarillo/oro ANSI 0;33 de ProxyGo REV26.19.
+
+VALIDACION LOCAL:
+- bash -n haproxy.sh: PASS
+- bash -n proxygo.sh: PASS
+- diff de arbol interno contra REV26.19: solo haproxy.sh y proxygo.sh cambian.
+- Prueba real pendiente en VPS: activacion [6] sobre una instalacion nueva y pruebas simultaneas SSL directo + Payload SSL.
+
+SHA256 haproxy.sh: be12e1703678b437328ff016f226c19b67cf3eb72b381016f9b3c3f8306e543e
+SHA256 proxygo.sh: 6ee43b6dc44534ce0f302df7f8fc82271b29823a5d261d5ce141fedb61732dbd
+SHA256 golden.zip: 0ed6b442f36f56bf6f502be8c20d4091671a9b7f18afd6df12b64ff12d0682ad
