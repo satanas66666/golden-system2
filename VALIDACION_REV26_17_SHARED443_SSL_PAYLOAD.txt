@@ -1,0 +1,27 @@
+NEW GOLDEN ADM PRO - REV26.17 SHARED443 SSL DIRECTO + PAYLOAD
+============================================================
+
+Base recibida:
+SHA-256 ZIP base: f7faff0c5a3b926461daab43dd5cecd4af832709002c1489c00493d3e81c83cb
+SHA-256 golden.zip base: cc39902102d97e83f941211de38c08c0f6f7cdb3e26fa1257e449adcb29e3695
+SHA-256 haproxy.sh base: bea3bc2e3b051e77bba74af1fe4985ba73267c82979fdb9637a134a92b53589c
+
+Cambio funcional UNICO dentro de golden.zip:
+- golden/SCRIPT/haproxy.sh
+- Nueva opcion [6] COMPARTIR 443: SSL DIRECTO + PAYLOAD.
+- TCP/443 queda poseido por un unico HAProxy; TLS termina en HAProxy.
+- Sin payload inmediato / firma SSH- -> 127.0.0.1:22.
+- Payload inmediato post-TLS -> 127.0.0.1:80.
+- Conserva la entrada 443 previa del mapa y la omite solo mientras SHARED443 esta activo.
+- Incluye desactivacion/restauracion y rollback si HAProxy no levanta.
+- No modifica HCR, BHTTP, XHTTP/H2, ProxyGo, V2Ray/Xray, SlowDNS, SSH core ni otros protocolos.
+- maxconn de HAProxy se conserva en 20000 para no alterar el perfil estable existente.
+
+SHA-256 haproxy.sh nuevo: ca461f2ece80f7387ae1706ab71a92f7013fa40e50d075a5474b3f57d80b66e5
+SHA-256 golden.zip nuevo: a15ea1c9d1c6c3cf8b9caeef2c18c4b45f49e43819ef1f7e9d9cd756c5cdaeb8
+
+Validaciones locales:
+- bash -n haproxy.sh: PASS
+- Estructura golden.zip: PASS
+- Diff de contenido: solo golden/SCRIPT/haproxy.sh: PASS (verificado al empaquetar)
+- Prueba real de escucha/conexion 443 en VPS: PENDIENTE (requiere servicios reales :22 y :80).

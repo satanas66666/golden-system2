@@ -1,0 +1,12 @@
+NEW GOLDEN ADM PRO REV26.18 - PROXYGO GOLD BARS
+
+BASE: REV26.17 SHARED443 SSL + PAYLOAD
+CAMBIO UNICO FUNCIONAL/VISUAL:
+- golden/SCRIPT/proxygo.sh
+- Las funciones linea() y linea2() ahora renderizan la misma barra =×=× en ANSI 33 (oro/amarillo) que el panel principal.
+- No se modifica ProxyGo core, puertos, servicios, systemd, reconexión, instalación, desinstalación ni networking.
+- HAProxy SSL opción 6 SHARED443 de REV26.17 permanece intacta.
+
+VALIDACIONES:
+- bash -n proxygo.sh: pendiente al empaquetar (verificada por generador de artefacto)
+- Comparación por contenido: todos los miembros del golden.zip, salvo proxygo.sh, permanecen byte-idénticos a REV26.17.
