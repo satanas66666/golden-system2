@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GOLDEN ADM PRO - bootstrap REV26.3.1 ROOT REAL + CLOUD APT + PANEL GOLD RUNTIME FIX
+# GOLDEN ADM PRO - bootstrap REV26.3.2 ROOT REAL + CLOUD APT + SSH LEGACY HOSTKEY COMPAT
 # Ubuntu/Debian antiguos y modernos con APT.
 # Si la VPS inicia como ubuntu/debian/admin/ec2-user/etc:
 #   1) detecta proveedor;
@@ -101,6 +101,218 @@ detect_provider() {
         *kvm*|*qemu*|*bochs*)                  echo "KVM/QEMU VPS" ;;
         *)                                      echo "VPS/Cloud no identificado" ;;
     esac
+}
+
+# Compatibilidad de clave de host RSA para clientes SSH antiguos (por ejemplo,
+# clientes que no entienden rsa-sha2-256/rsa-sha2-512). Se conserva el orden
+# moderno de OpenSSH y se agrega ssh-rsa AL FINAL, sin tocar autenticación de
+# usuario ni quitar Ed25519/ECDSA/RSA-SHA2. Todo cambio se valida y revierte
+# automáticamente si sshd no lo acepta o no reinicia correctamente.
+golden_restart_sshd() {
+    local svc
+    if command -v systemctl >/dev/null 2>&1; then
+        for svc in ssh sshd; do
+            if systemctl cat "$svc.service" >/dev/null 2>&1; then
+                systemctl restart "$svc.service" >/dev/null 2>&1 && return 0
+            fi
+        done
+    fi
+    if command -v service >/dev/null 2>&1; then
+        service ssh restart >/dev/null 2>&1 && return 0
+        service sshd restart >/dev/null 2>&1 && return 0
+    fi
+    return 1
+}
+
+golden_effective_hostkey_algorithms() {
+    local sshd_bin="$1"
+    "$sshd_bin" -T -C user=root,host="$(hostname)",addr=127.0.0.1 2>/dev/null \
+        | awk '$1=="hostkeyalgorithms"{print $2; exit}'
+}
+
+golden_effective_hostkeys() {
+    local sshd_bin="$1"
+    "$sshd_bin" -T -C user=root,host="$(hostname)",addr=127.0.0.1 2>/dev/null \
+        | awk '$1=="hostkey"{print $2}'
+}
+
+golden_has_ssh_rsa_hostkey_algorithm() {
+    local list=",${1:-},"
+    [[ "$list" == *,ssh-rsa,* ]]
+}
+
+golden_has_rsa_hostkey_path() {
+    local list="${1:-}"
+    printf '%s\n' "$list" | grep -Fxq '/etc/ssh/ssh_host_rsa_key'
+}
+
+golden_restore_ssh_compat_state() {
+    local backup="$1" sshcfg="$2" rsa_priv="$3" rsa_pub="$4"
+    cp -a "$backup/sshd_config" "$sshcfg" 2>/dev/null || return 1
+
+    if [[ -e "$backup/ssh_host_rsa_key" || -L "$backup/ssh_host_rsa_key" ]]; then
+        cp -a "$backup/ssh_host_rsa_key" "$rsa_priv" 2>/dev/null || return 1
+    else
+        rm -f -- "$rsa_priv" 2>/dev/null || true
+    fi
+    if [[ -e "$backup/ssh_host_rsa_key.pub" || -L "$backup/ssh_host_rsa_key.pub" ]]; then
+        cp -a "$backup/ssh_host_rsa_key.pub" "$rsa_pub" 2>/dev/null || return 1
+    else
+        rm -f -- "$rsa_pub" 2>/dev/null || true
+    fi
+    return 0
+}
+
+ensure_legacy_ssh_hostkey_compat() {
+    [[ "$(id -u)" -eq 0 ]] || return 0
+
+    local sshcfg="/etc/ssh/sshd_config" sshd_bin=""
+    local hostalgs="" hostalgs_after="" hostkeys="" hostkeys_after=""
+    local stamp backup tmp restart_ok=0 need_algo=0 need_hostkey=0 need_key=0
+    local rsa_priv="/etc/ssh/ssh_host_rsa_key" rsa_pub="/etc/ssh/ssh_host_rsa_key.pub"
+
+    [[ -f "$sshcfg" ]] || {
+        msg_early err "No existe $sshcfg; no se puede preparar compatibilidad SSH."
+        return 1
+    }
+
+    sshd_bin="$(command -v sshd || true)"
+    [[ -n "$sshd_bin" ]] || [[ ! -x /usr/sbin/sshd ]] || sshd_bin=/usr/sbin/sshd
+    [[ -n "$sshd_bin" ]] || {
+        msg_early err "No se encontró sshd; no se puede validar compatibilidad SSH."
+        return 1
+    }
+
+    if ! "$sshd_bin" -t >/dev/null 2>&1; then
+        msg_early err "La configuración SSH existente ya es inválida; no se modificó."
+        return 1
+    fi
+
+    hostalgs="$(golden_effective_hostkey_algorithms "$sshd_bin")"
+    hostkeys="$(golden_effective_hostkeys "$sshd_bin")"
+
+    golden_has_ssh_rsa_hostkey_algorithm "$hostalgs" || need_algo=1
+    [[ -s "$rsa_priv" ]] || need_key=1
+    if [[ -n "$hostkeys" ]] && ! golden_has_rsa_hostkey_path "$hostkeys"; then
+        need_hostkey=1
+    fi
+
+    if (( need_algo == 0 && need_hostkey == 0 && need_key == 0 )); then
+        msg_early ok "SSH compatible: RSA de host + fallback ssh-rsa ya disponibles."
+        return 0
+    fi
+
+    command -v ssh-keygen >/dev/null 2>&1 || {
+        msg_early err "Falta ssh-keygen; no se puede preparar una clave RSA de host."
+        return 1
+    }
+
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    backup="/var/backups/golden-ssh-hostkey-compat-$stamp"
+    if ! mkdir -p "$backup"; then
+        msg_early err "No se pudo crear respaldo SSH en $backup."
+        return 1
+    fi
+    cp -a "$sshcfg" "$backup/sshd_config" || {
+        msg_early err "No se pudo respaldar sshd_config; no se modificó SSH."
+        return 1
+    }
+    [[ ! -e "$rsa_priv" && ! -L "$rsa_priv" ]] || cp -a "$rsa_priv" "$backup/ssh_host_rsa_key" || return 1
+    [[ ! -e "$rsa_pub" && ! -L "$rsa_pub" ]] || cp -a "$rsa_pub" "$backup/ssh_host_rsa_key.pub" || return 1
+
+    if (( need_key == 1 )); then
+        rm -f -- "$rsa_priv" "$rsa_pub" 2>/dev/null || true
+        if ! ssh-keygen -q -t rsa -b 3072 -N '' -f "$rsa_priv"; then
+            golden_restore_ssh_compat_state "$backup" "$sshcfg" "$rsa_priv" "$rsa_pub" || true
+            msg_early err "No se pudo generar la clave RSA de host; estado anterior restaurado."
+            return 1
+        fi
+        chown root:root "$rsa_priv" "$rsa_pub" 2>/dev/null || true
+        chmod 600 "$rsa_priv" 2>/dev/null || true
+        chmod 644 "$rsa_pub" 2>/dev/null || true
+    fi
+
+    if (( need_algo == 1 || need_hostkey == 1 )); then
+        tmp="$(mktemp /tmp/golden-sshd-compat.XXXXXX)"
+        awk '
+BEGIN { skip=0 }
+/^# BEGIN GOLDEN LEGACY SSH HOSTKEY COMPAT$/ { skip=1; next }
+/^# END GOLDEN LEGACY SSH HOSTKEY COMPAT$/   { skip=0; next }
+skip==0 { print }
+' "$sshcfg" >"$tmp"
+
+        {
+            echo '# BEGIN GOLDEN LEGACY SSH HOSTKEY COMPAT'
+            echo '# Mantiene algoritmos modernos y agrega compatibilidad solo como fallback.'
+            (( need_hostkey == 0 )) || echo 'HostKey /etc/ssh/ssh_host_rsa_key'
+            (( need_algo == 0 )) || echo 'HostKeyAlgorithms +ssh-rsa'
+            echo '# END GOLDEN LEGACY SSH HOSTKEY COMPAT'
+            cat "$tmp"
+        } >"$sshcfg"
+        rm -f "$tmp"
+    fi
+
+    if ! "$sshd_bin" -t >/dev/null 2>&1; then
+        golden_restore_ssh_compat_state "$backup" "$sshcfg" "$rsa_priv" "$rsa_pub" || true
+        msg_early err "sshd rechazó la compatibilidad; configuración anterior restaurada."
+        return 1
+    fi
+
+    hostalgs_after="$(golden_effective_hostkey_algorithms "$sshd_bin")"
+    hostkeys_after="$(golden_effective_hostkeys "$sshd_bin")"
+    if ! golden_has_ssh_rsa_hostkey_algorithm "$hostalgs_after"; then
+        golden_restore_ssh_compat_state "$backup" "$sshcfg" "$rsa_priv" "$rsa_pub" || true
+        msg_early err "OpenSSH no aplicó ssh-rsa; configuración anterior restaurada."
+        return 1
+    fi
+    if [[ -n "$hostkeys_after" ]] && ! golden_has_rsa_hostkey_path "$hostkeys_after"; then
+        golden_restore_ssh_compat_state "$backup" "$sshcfg" "$rsa_priv" "$rsa_pub" || true
+        msg_early err "OpenSSH no cargó la clave RSA de host; configuración anterior restaurada."
+        return 1
+    fi
+    if [[ ! -s "$rsa_priv" ]]; then
+        golden_restore_ssh_compat_state "$backup" "$sshcfg" "$rsa_priv" "$rsa_pub" || true
+        msg_early err "La clave RSA de host no quedó disponible; estado anterior restaurado."
+        return 1
+    fi
+
+    if golden_restart_sshd; then
+        restart_ok=1
+    fi
+
+    if (( restart_ok == 0 )); then
+        golden_restore_ssh_compat_state "$backup" "$sshcfg" "$rsa_priv" "$rsa_pub" || true
+        golden_restart_sshd >/dev/null 2>&1 || true
+        msg_early err "No se pudo reiniciar SSH; configuración anterior restaurada."
+        return 1
+    fi
+
+    sleep 1
+    if ! "$sshd_bin" -t >/dev/null 2>&1; then
+        golden_restore_ssh_compat_state "$backup" "$sshcfg" "$rsa_priv" "$rsa_pub" || true
+        golden_restart_sshd >/dev/null 2>&1 || true
+        msg_early err "SSH no pasó la validación final; configuración anterior restaurada."
+        return 1
+    fi
+
+    hostalgs_after="$(golden_effective_hostkey_algorithms "$sshd_bin")"
+    hostkeys_after="$(golden_effective_hostkeys "$sshd_bin")"
+    if ! golden_has_ssh_rsa_hostkey_algorithm "$hostalgs_after"; then
+        golden_restore_ssh_compat_state "$backup" "$sshcfg" "$rsa_priv" "$rsa_pub" || true
+        golden_restart_sshd >/dev/null 2>&1 || true
+        msg_early err "La validación final no confirmó ssh-rsa; configuración restaurada."
+        return 1
+    fi
+    if [[ -n "$hostkeys_after" ]] && ! golden_has_rsa_hostkey_path "$hostkeys_after"; then
+        golden_restore_ssh_compat_state "$backup" "$sshcfg" "$rsa_priv" "$rsa_pub" || true
+        golden_restart_sshd >/dev/null 2>&1 || true
+        msg_early err "La validación final no confirmó la clave RSA de host; configuración restaurada."
+        return 1
+    fi
+
+    msg_early ok "Compatibilidad SSH aplicada: algoritmos modernos + fallback ssh-rsa."
+    msg_early info "Respaldo SSH: $backup"
+    return 0
 }
 
 prepare_real_root_login() {
@@ -344,6 +556,14 @@ if [[ "$(id -u)" -ne 0 ]]; then
     echo -e "${C_RED}Debes volver a entrar realmente como usuario root para continuar.${C_RESET}" >&2
     exit 1
 fi
+
+# Antes de instalar el panel, deja SSH preparado para clientes modernos y
+# clientes antiguos que solo aceptan la firma de host ssh-rsa. No sustituye
+# algoritmos modernos: únicamente añade el fallback ya validado en producción.
+ensure_legacy_ssh_hostkey_compat || {
+    msg_early err "No se pudo garantizar compatibilidad SSH segura. Instalación detenida sin continuar."
+    exit 1
+}
 
 OS_ID=""; OS_VERSION=""; PRETTY_NAME=""
 if [[ -r /etc/os-release ]]; then
@@ -659,7 +879,7 @@ safe_wget() {
 
 clear 2>/dev/null || true
 gold_bar
-printf '%b\n' "${C_YELLOW}        GOLDEN ADM PRO - INSTALADOR REV26.3.1 UNIVERSAL${C_RESET}"
+printf '%b\n' "${C_YELLOW}        GOLDEN ADM PRO - INSTALADOR REV26.3.2 UNIVERSAL${C_RESET}"
 gold_bar
 echo "Sistema   : ${PRETTY_NAME:-$OS_ID $OS_VERSION}"
 echo "Proveedor : $(detect_provider)"
