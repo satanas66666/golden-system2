@@ -405,7 +405,7 @@ prepare_artifacts() {
       menu PGet.py ports.sh badvpn.sh bhttp.sh xhttp-h2.sh hcr.sh hcr-server ADMbot.sh message.txt usercodes websocket.sh
       POpen.py PPriv.py PPub.py PDirect.py speedtest.py speed.sh utils.sh
       dropbear.sh apacheon.sh openvpn.sh shadowsocks.sh ssl.sh squid.sh dados.sh
-      Crear-Demo.sh squidpass.sh htop.sh gestor.sh proxygo.sh shared80-443.sh cambiarpass.sh
+      Crear-Demo.sh squidpass.sh htop.sh gestor.sh proxygo.sh ssh-payload-bridge.sh ssh-payload-core.sh shared80-443.sh cambiarpass.sh
       Proxy-Publico.py Proxy-Privado.py haproxy.sh hysteria.sh hora.sh panelweb.sh
       optimizar.sh v2ray.sh passvulrt.sh nload.sh bbr.sh ban_iptables.sh slowdns.sh
       proxy_manager.sh compat.sh
@@ -424,6 +424,10 @@ prepare_artifacts() {
         die "gerar.sh no incluye hcr.sh en BASICINST."
     grep -qE '(^|[[:space:]])hcr-server([[:space:]]|$)' "$TMP_DIR/extract/golden/gerar.sh" ||
         die "gerar.sh no incluye hcr-server en BASICINST."
+    for payload in ssh-payload-bridge.sh ssh-payload-core.sh; do
+        grep -qE "(^|[[:space:]])${payload//./\\.}([[:space:]]|$)" "$TMP_DIR/extract/golden/gerar.sh" ||
+            die "gerar.sh no incluye $payload en BASICINST."
+    done
     [[ "$(tr -d '\r\n ' <"$TMP_DIR/extract/golden/.golden_revision" 2>/dev/null || true)" == "REV26" ]] ||
         die "golden.zip no corresponde a REV26; evita mezclar revisiones."
 }

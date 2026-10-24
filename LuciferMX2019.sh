@@ -1034,7 +1034,7 @@ fi
 case $1 in
 "menu"|"message.txt")ARQ="${SCPdir}/";;
 "usercodes")ARQ="${SCPusr}/";;
-"openssh.sh"|"squid.sh"|"dropbear.sh"|"openvpn.sh"|"ssl.sh"|"proxygo.sh"|"shared80-443.sh"|"hysteria.sh"|"badvpn.sh"|"bhttp.sh"|"xhttp-h2.sh"|"hcr.sh"|"hcr-server"|"slowdns.sh"|"haproxy.sh"|"shadowsocks.sh"|"v2ray.sh"|"websocket.sh"|"compat.sh"|"PDirect.py"|"PPub.py"|"PPriv.py"|"POpen.py"|"PGet.py") ARQ="${SCPinst}/";;
+"openssh.sh"|"squid.sh"|"dropbear.sh"|"openvpn.sh"|"ssl.sh"|"proxygo.sh"|"ssh-payload-bridge.sh"|"shared80-443.sh"|"hysteria.sh"|"badvpn.sh"|"bhttp.sh"|"xhttp-h2.sh"|"hcr.sh"|"hcr-server"|"slowdns.sh"|"haproxy.sh"|"shadowsocks.sh"|"v2ray.sh"|"websocket.sh"|"compat.sh"|"PDirect.py"|"PPub.py"|"PPriv.py"|"POpen.py"|"PGet.py") ARQ="${SCPinst}/";;
 *)ARQ="${SCPfrm}/";;
 esac
 
@@ -1045,7 +1045,7 @@ chmod +x ${ARQ}/$1
 
 post_payload_sanity() {
     local f
-    local -a required=(compat.sh badvpn.sh bhttp.sh xhttp-h2.sh hcr.sh hcr-server proxygo.sh shared80-443.sh dropbear.sh openvpn.sh ssl.sh squid.sh haproxy.sh hysteria.sh slowdns.sh v2ray.sh websocket.sh)
+    local -a required=(compat.sh badvpn.sh bhttp.sh xhttp-h2.sh hcr.sh hcr-server proxygo.sh ssh-payload-bridge.sh shared80-443.sh dropbear.sh openvpn.sh ssl.sh squid.sh haproxy.sh hysteria.sh slowdns.sh v2ray.sh websocket.sh)
     for f in "${required[@]}"; do
         if [[ ! -s "$SCPinst/$f" ]]; then
             echo "[ERROR] Componente requerido ausente o vacío: $SCPinst/$f" >&2
@@ -1058,6 +1058,12 @@ post_payload_sanity() {
             }
         fi
     done
+    # Motor privado: no aparece en el menu de protocolos; se distribuye en ger-frm.
+    [[ -s /etc/ger-frm/ssh-payload-core.sh ]] || {
+        echo "[ERROR] Falta el motor SSH PAYLOAD BRIDGE en /etc/ger-frm." >&2
+        return 1
+    }
+    bash -n /etc/ger-frm/ssh-payload-core.sh || return 1
     # compat.sh debe cargar realmente las funciones que usan los protocolos.
     bash -c '. /etc/ger-inst/compat.sh; declare -F golden_apt_wait >/dev/null; declare -F golden_progress_command >/dev/null; declare -F golden_service >/dev/null' || {
         echo "[ERROR] compat.sh no cargó las funciones requeridas." >&2
